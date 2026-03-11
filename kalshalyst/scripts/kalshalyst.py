@@ -101,13 +101,33 @@ _BLOCKED_CATEGORIES_API = {
     "social-media", "streaming", "celebrities",
 }
 
-_SPORTS_TOKENS = {
-    "nfl", "nba", "mlb", "nhl", "mls", "ncaa", "pga", "ufc", "wwe",
+# Long/multi-word tokens safe for simple substring matching
+_SPORTS_TOKENS_SUBSTR = {
     "super bowl", "superbowl", "march madness", "world series",
-    "stanley cup", "finals", "playoff", "mvp", "heisman",
+    "stanley cup", "finals game", "playoff", "mvp award", "heisman",
     "premier league", "la liga", "serie a", "bundesliga", "ligue 1",
-    "champions league", "europa league", "copa", "valorant", "league of legends",
+    "champions league", "europa league", "copa america",
+    "challenger", "tennis",
+    "valorant", "league of legends", "counter-strike",
+    "esports", "esport",
+    "boxing", "bellator", "fight night",
+    "formula 1", "f1 grand prix", "motogp", "nascar", "cricket",
+    # Kalshi sports ticker prefixes (unambiguous compound strings)
+    "kxatp", "kxwta", "kxnba", "kxnfl", "kxmlb", "kxnhl", "kxncaa",
+    "kxmma", "kxufc", "kxbox", "kxnascar", "kxf1", "kxlol", "kxvalorant",
+    "kxcsgo", "kxdota", "kxcricket", "kxipl", "kxtennis",
+    # Kalshi match/game/spread ticker patterns
+    "challengermatch", "nbaspread", "nflspread", "mlbgame", "nhlgame",
+    "nbagame", "nflgame", "lolgame", "ncaambgame", "ncaafbgame",
 }
+
+# Short tokens (3-4 chars) that collide with normal words — require word boundary
+# "nfl" hits "inflation", "mma" hits "commander", "mlb" hits "assemblb...", etc.
+import re as _re
+_SPORTS_TOKENS_WORD_BOUNDARY = _re.compile(
+    r'\b(?:nfl|nba|mlb|nhl|mls|ncaa|pga|ufc|wwe|atp|wta|itf|mma|lpga|ipl'
+    r'|csgo|cs2|dota)\b', _re.IGNORECASE
+)
 
 _MICRO_TIMEFRAME_PATTERNS = {
     "in next 15 min", "in next 30 min", "in next 1 hour",
@@ -332,6 +352,10 @@ def _infer_category(ticker: str, title: str) -> str:
     if any(ticker_upper.startswith(p) for p in ("KXECON", "GDP", "CPI", "JOBS")):
         return "economics"
 
+    # Sports detection (must be before title-based to catch "will X win" patterns)
+    if _is_sports(ticker, title):
+        return "sports"
+
     # Title-based inference
     title_lower = title.lower()
     if any(w in title_lower for w in ("federal reserve", "fed funds", "fomc", "rate cut", "rate hike")):
@@ -411,7 +435,11 @@ def _is_blocked(ticker: str, category: str = "", title: str = "",
 
 def _is_sports(ticker: str, title: str) -> bool:
     combined = f"{ticker} {title}".lower()
-    return any(tok in combined for tok in _SPORTS_TOKENS)
+    if any(tok in combined for tok in _SPORTS_TOKENS_SUBSTR):
+        return True
+    if _SPORTS_TOKENS_WORD_BOUNDARY.search(combined):
+        return True
+    return False
 
 
 # ── Phase 1: Market Fetching ──────────────────────────────────────────────
