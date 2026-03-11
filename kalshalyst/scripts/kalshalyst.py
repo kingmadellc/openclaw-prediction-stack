@@ -978,11 +978,19 @@ def run_kalshalyst(client, cfg: dict, dry_run: bool = False) -> bool:
     edges = _apply_market_filter(edges, cfg)
 
     # Phase 5: Cache + alert
+    # Include market scope in cache for downstream consumers (briefs, alerts)
+    try:
+        from sports_estimator import is_sports_estimator_available, MARKET_SCOPE_SHORT, MARKET_SCOPE_PREMIUM_SHORT
+        scope_msg = MARKET_SCOPE_PREMIUM_SHORT if is_sports_estimator_available() else MARKET_SCOPE_SHORT
+    except ImportError:
+        scope_msg = "policy | politics | tech | economics | macro (sports excluded)"
+
     cache_payload = {
         "insights": [format_insight(e) for e in edges[:20]],
         "macro_count": len(edges),
         "total_scanned": len(markets),
         "scanner_version": "1.0.0",
+        "market_scope": scope_msg,
         "cached_at": datetime.now(timezone.utc).isoformat(),
     }
 

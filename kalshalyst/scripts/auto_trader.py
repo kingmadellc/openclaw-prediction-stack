@@ -538,6 +538,24 @@ def run_auto_trader(dry_run: bool = False) -> dict:
             _log_state("scan_end", {"reason": "no_markets", "edges_found": 0})
             return {"status": "no_markets"}
 
+        # ── Phase 1.5: Sports routing (premium gate) ──────────────────
+        # Sports markets are blocked by _is_sports() in Phase 1 (fetch).
+        # If sports_estimator is available (premium), we could fetch sports
+        # markets separately and route them to the data-driven model.
+        # For now, log the scope for transparency.
+        try:
+            from sports_estimator import is_sports_estimator_available, MARKET_SCOPE_SHORT, MARKET_SCOPE_PREMIUM_SHORT
+            if is_sports_estimator_available():
+                logger.info(f"Market scope: {MARKET_SCOPE_PREMIUM_SHORT}")
+                # TODO: When sports estimator is production-ready:
+                # 1. Fetch sports markets (bypass _is_sports filter)
+                # 2. Route to estimate_sports_market()
+                # 3. Merge sports edges with macro edges below
+            else:
+                logger.info(f"Market scope: {MARKET_SCOPE_SHORT}")
+        except ImportError:
+            logger.info("Market scope: policy | politics | tech | economics | macro (sports excluded)")
+
         logger.info(f"Phase 3+4: Estimating edges for {len(markets)} markets...")
         edges = calculate_edges(markets, pipeline_cfg)
 

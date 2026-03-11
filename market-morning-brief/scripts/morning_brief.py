@@ -184,7 +184,9 @@ def format_kalshalyst_section(cache_path, config, debug=False):
         if not insights:
             return "EDGES: none found"
 
-        lines = [f"EDGES (Kalshalyst, top {len(insights)}):"]
+        # Market scope descriptor — tells users what categories are being scanned
+        scope = data.get("market_scope", "policy | politics | tech | economics | macro")
+        lines = [f"EDGES (Kalshalyst, top {len(insights)}):", f"  Scope: {scope}"]
 
         for i, edge in enumerate(insights, 1):
             ticker = edge.get("ticker", "?")
