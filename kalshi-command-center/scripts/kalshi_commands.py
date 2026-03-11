@@ -731,7 +731,10 @@ def _place_order(
         if not client:
             return f"❌ {_classify_kalshi_error(_last_client_error)}"
 
-        from kalshi_python.models.create_order_request import CreateOrderRequest
+        try:
+            from kalshi_python_sync.models.create_order_request import CreateOrderRequest
+        except ImportError:
+            from kalshi_python.models.create_order_request import CreateOrderRequest
 
         order_params = {
             "ticker": ticker,

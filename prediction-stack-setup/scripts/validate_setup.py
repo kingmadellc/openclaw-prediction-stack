@@ -105,20 +105,30 @@ def validate_kalshi(config: dict, verbose: bool = False) -> ValidationResult:
             return result
 
         # Test Kalshi connection
-        from kalshi_python import Configuration, KalshiClient
+        try:
+            from kalshi_python_sync import Configuration, KalshiClient
+        except ImportError:
+            from kalshi_python import Configuration, KalshiClient
 
-        config_obj = Configuration(host="https://api.kalshi.com/")
+        config_obj = Configuration(host="https://api.elections.kalshi.com/trade-api/v2")
         with open(key_path, 'r') as f:
             config_obj.private_key_pem = f.read()
         config_obj.api_key_id = key_id
 
         client = KalshiClient(config_obj)
 
-        # Test with get_balance() — simple read-only call
-        balance = client._portfolio_api.get_balance()
+        # Test with get_positions() — public method, avoids _portfolio_api internals
+        try:
+            resp = client.get_positions(limit=1)
+            balance = None  # v3 SDK — balance fetched separately if needed
+        except (TypeError, AttributeError):
+            balance = client._portfolio_api.get_balance()
 
         if verbose:
-            logger.info(f"  → Kalshi balance: ${balance / 100:.2f}")
+            if balance is not None:
+                logger.info(f"  → Kalshi balance: ${balance / 100:.2f}")
+            else:
+                logger.info("  → Kalshi auth OK (v3 SDK)")
 
         result.passed = True
 

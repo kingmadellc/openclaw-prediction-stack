@@ -54,9 +54,12 @@ except ImportError:
     yaml = None
 
 try:
-    from kalshi_python import KalshiClient
+    from kalshi_python_sync import KalshiClient
 except ImportError:
-    KalshiClient = None
+    try:
+        from kalshi_python import KalshiClient
+    except ImportError:
+        KalshiClient = None
 
 
 def log(msg, debug=False):

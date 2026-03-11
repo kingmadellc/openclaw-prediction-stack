@@ -24,10 +24,13 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Tuple
 
 try:
-    from kalshi_python import KalshiClient
+    from kalshi_python_sync import KalshiClient
 except ImportError:
-    print("ERROR: kalshi_python package not found. Install with: pip install kalshi_python")
-    sys.exit(1)
+    try:
+        from kalshi_python import KalshiClient
+    except ImportError:
+        print("ERROR: Neither kalshi_python_sync nor kalshi_python found. Install with: pip install kalshi-python-sync")
+        sys.exit(1)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
