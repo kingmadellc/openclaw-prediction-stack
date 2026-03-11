@@ -442,11 +442,13 @@ def _get_active_kalshi_topics() -> list:
             _log(f"get_positions with kwargs failed ({api_err}), retrying without")
             resp = client.get_positions()
 
-        # SDK returns GetPositionsResponse — extract market_positions
-        if hasattr(resp, "market_positions"):
-            positions = resp.market_positions or []
+        # SDK returns GetPositionsResponse — v3 uses .positions, v2 uses .market_positions
+        if hasattr(resp, "positions") and resp.positions is not None:
+            positions = resp.positions
+        elif hasattr(resp, "market_positions") and resp.market_positions is not None:
+            positions = resp.market_positions
         elif isinstance(resp, dict):
-            positions = resp.get("market_positions", [])
+            positions = resp.get("market_positions", resp.get("positions", []))
         else:
             _log(f"Unexpected Kalshi response type: {type(resp)}")
             positions = []

@@ -116,14 +116,21 @@ def _get_client(*, _retries: int = 1, _backoff: float = 2.0):
 
     for attempt in range(_retries + 1):
         try:
-            from kalshi_python import Configuration, KalshiClient
+            try:
+                from kalshi_python_sync import Configuration, KalshiClient
+            except ImportError:
+                from kalshi_python import Configuration, KalshiClient
 
             config = Configuration(host=BASE_URL)
             with open(PRIVATE_KEY_PATH, 'r') as f:
                 config.private_key_pem = f.read()
             config.api_key_id = KEY_ID
             client = KalshiClient(config)
-            client._portfolio_api.get_balance()  # verify auth
+            # Verify auth — try public method first, fall back to internal API
+            try:
+                client.get_positions(limit=1)
+            except (TypeError, AttributeError):
+                client._portfolio_api.get_balance()
 
             if attempt > 0:
                 logger.info("Kalshi client connected after %d retries", attempt)
