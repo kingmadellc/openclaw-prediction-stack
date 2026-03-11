@@ -392,9 +392,10 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
                 "order_result": order_result[:200],
             })
 
-            if "✅" in order_result:
+            if "✅" in order_result and "UNVERIFIED" not in order_result:
                 logger.info(f"EXECUTED: {side.upper()} {result.contracts}x {ticker} @ {exec_price}¢ "
                             f"(${result.cost_usd:.2f}, edge={effective_edge:.1f}%)")
+                logger.info(f"  Verification: {order_result.split(chr(10))[-1] if chr(10) in order_result else 'n/a'}")
                 executed_trades.append({
                     "ticker": ticker,
                     "side": side,
@@ -407,9 +408,13 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
                 executed += 1
                 remaining_balance -= result.cost_usd
                 exposure += result.cost_usd
+            elif "✅" in order_result and "UNVERIFIED" in order_result:
+                logger.warning(f"Order placed but UNVERIFIED for {ticker}: {order_result[:200]}")
+                errors.append(f"unverified:{ticker}")
+                skipped += 1
             else:
-                logger.warning(f"Order issue for {ticker}: {order_result[:100]}")
-                errors.append(f"order_issue:{ticker}")
+                logger.warning(f"Order FAILED for {ticker}: {order_result[:200]}")
+                errors.append(f"order_failed:{ticker}")
                 skipped += 1
 
         except Exception as e:

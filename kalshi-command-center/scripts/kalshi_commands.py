@@ -748,21 +748,78 @@ def _place_order(
         resp = client._portfolio_api.create_order_without_preload_content(order_request)
         result = json.loads(resp.read())
 
-        order = result.get("order", {})
-        status = order.get("status", "unknown")
-        order_id = order.get("order_id", "?")
+        # ── Validate API response ──────────────────────────────────────
+        if "error" in result:
+            error_msg = result.get("error", {})
+            if isinstance(error_msg, dict):
+                error_msg = error_msg.get("message", str(error_msg))
+            _trade_audit(f"{action}_api_error", {
+                "ticker": ticker, "error": str(error_msg)[:200],
+            })
+            return f"❌ Kalshi API error: {error_msg}"
+
+        order = result.get("order")
+        if not order or not isinstance(order, dict):
+            _trade_audit(f"{action}_invalid_response", {
+                "ticker": ticker, "raw_response": str(result)[:300],
+            })
+            return f"❌ Kalshi returned invalid response — no 'order' object. Raw: {str(result)[:150]}"
+
+        order_id = order.get("order_id")
+        status = order.get("status")
+
+        if not order_id:
+            _trade_audit(f"{action}_no_order_id", {
+                "ticker": ticker, "raw_order": str(order)[:300],
+            })
+            return f"❌ Kalshi returned order without order_id. Raw: {str(order)[:150]}"
 
         _trade_audit(f"{action}_placed", {
-            "ticker": ticker, "order_id": order_id, "status": status,
+            "ticker": ticker, "order_id": order_id, "status": status or "unknown",
         })
 
+        # ── Post-placement verification ────────────────────────────────
+        verified = False
+        verify_msg = ""
+        try:
+            orders_url = f"{BASE_URL}/portfolio/orders?status=resting"
+            orders_resp = json.loads(client.call_api("GET", orders_url).read())
+            resting = orders_resp.get("orders", [])
+            found_resting = any(o.get("order_id") == order_id for o in resting)
+
+            positions_url = f"{BASE_URL}/portfolio/positions"
+            pos_resp = json.loads(client.call_api("GET", positions_url).read())
+            positions = pos_resp.get("market_positions", pos_resp.get("positions", []))
+            found_position = any(
+                p.get("ticker") == ticker or p.get("market_ticker") == ticker
+                for p in positions
+            )
+
+            if found_resting:
+                verified = True
+                verify_msg = "VERIFIED: resting on Kalshi"
+            elif found_position:
+                verified = True
+                verify_msg = "VERIFIED: filled immediately"
+            elif status == "executed":
+                verified = True
+                verify_msg = "VERIFIED: status=executed"
+            else:
+                verify_msg = "UNVERIFIED — check Kalshi directly"
+                _trade_audit(f"{action}_unverified", {
+                    "ticker": ticker, "order_id": order_id, "status": status,
+                })
+        except Exception as ve:
+            verify_msg = f"verification failed: {ve}"
+
         name = TICKER_NAMES.get(ticker, ticker)
-        fill_msg = "Filled" if status == "executed" else "Resting" if status == "resting" else status.capitalize()
+        fill_msg = "Filled" if status == "executed" else "Resting" if status == "resting" else (status or "unknown").capitalize()
         verb = "Bought" if action == "buy" else "Sold"
         amount_label = "total cost" if action == "buy" else "est. proceeds"
         return (
             f"✅ {verb} {quantity}x {side.upper()} on {name} at {price_cents}¢\n"
-            f"💰 {fill_msg} — {amount_label} ${amount:.2f}"
+            f"💰 {fill_msg} — {amount_label} ${amount:.2f}\n"
+            f"🔍 {verify_msg}"
         )
 
     except Exception as e:
