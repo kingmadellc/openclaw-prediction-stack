@@ -431,8 +431,15 @@ def _get_active_kalshi_topics() -> list:
         # SDK 3.x signature varies — call with no kwargs, filter locally
         try:
             resp = client.get_positions(limit=100, settlement_status="unsettled")
-        except (TypeError, Exception) as sdk_err:
+        except TypeError as sdk_err:
             _log(f"get_positions with kwargs failed ({sdk_err}), retrying without")
+            resp = client.get_positions()
+        except Exception as api_err:
+            err_str = str(api_err).lower()
+            if "401" in err_str or "403" in err_str or "unauthorized" in err_str or "forbidden" in err_str:
+                _log(f"FATAL: Kalshi auth failed fetching positions: {api_err}. Check api_key_id in ~/.openclaw/config.yaml")
+                return []  # Signal auth failure clearly in logs
+            _log(f"get_positions with kwargs failed ({api_err}), retrying without")
             resp = client.get_positions()
 
         # SDK returns GetPositionsResponse — extract market_positions

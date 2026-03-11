@@ -77,11 +77,19 @@ def _log_state(event: str, data: dict):
 # ── Safety Checks ─────────────────────────────────────────────────────────
 
 def get_current_positions(client) -> dict:
-    """Fetch current Kalshi positions. Returns {ticker: {position, side}}."""
+    """Fetch current Kalshi positions. Returns {ticker: {position, side}}.
+
+    Raises on auth/network errors so callers know positions fetch failed
+    vs. genuinely having zero positions.
+    """
     positions = {}
     try:
         resp = client._portfolio_api.get_positions_without_preload_content(limit=100)
-        data = json.loads(resp.read())
+        raw = resp.read()
+        # Check for HTTP-level auth errors before parsing
+        if hasattr(resp, 'status') and resp.status in (401, 403):
+            raise RuntimeError(f"Kalshi auth failed (HTTP {resp.status}). Check api_key_id in config.yaml.")
+        data = json.loads(raw)
         for p in data.get("market_positions", []):
             ticker = p.get("ticker", "")
             qty = int(p.get("position", 0))
@@ -91,7 +99,14 @@ def get_current_positions(client) -> dict:
                     "side": "yes" if qty > 0 else "no",
                     "abs_qty": abs(qty),
                 }
+    except (RuntimeError, PermissionError) as auth_err:
+        logger.error(f"AUTH ERROR fetching positions: {auth_err}")
+        raise
     except Exception as e:
+        err_str = str(e).lower()
+        if "401" in err_str or "403" in err_str or "unauthorized" in err_str or "forbidden" in err_str:
+            logger.error(f"AUTH ERROR fetching positions: {e}")
+            raise RuntimeError(f"Kalshi auth failed: {e}") from e
         logger.error(f"Failed to fetch positions: {e}")
     return positions
 
