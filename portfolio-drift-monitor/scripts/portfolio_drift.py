@@ -106,15 +106,18 @@ class PortfolioDriftMonitor:
 
             # Extract positions list — handle SDK v3 (.positions) and v2 (.market_positions)
             _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
+            _EMPTY_ONLY_KEYS = {"cursor"}  # Kalshi returns only cursor when portfolio is empty
             raw_positions = []
             if isinstance(response, dict):
                 # Schema validation — fail loud if Kalshi changed field names again
+                # Exception: response with only cursor/pagination keys = empty portfolio, not schema error
                 if response and not any(k in response for k in _KNOWN_POS_KEYS):
-                    raise RuntimeError(
-                        f"SCHEMA DRIFT: Kalshi API response has none of the expected position keys. "
-                        f"Got: {sorted(response.keys())}. Expected one of: {_KNOWN_POS_KEYS}. "
-                        f"Kalshi changed their API — fix field names in portfolio_drift.py."
-                    )
+                    if not set(response.keys()) <= _EMPTY_ONLY_KEYS:
+                        raise RuntimeError(
+                            f"SCHEMA DRIFT: Kalshi API response has none of the expected position keys. "
+                            f"Got: {sorted(response.keys())}. Expected one of: {_KNOWN_POS_KEYS}. "
+                            f"Kalshi changed their API — fix field names in portfolio_drift.py."
+                        )
                 raw_positions = response.get("event_positions") or response.get("positions") or response.get("market_positions", [])
             else:
                 # SDK object — try .event_positions (v3 API), .positions (SDK), .market_positions (v2)
@@ -354,7 +357,11 @@ class PortfolioDriftMonitor:
                 data = vars(response) if hasattr(response, "__dict__") else {}
 
             _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
+            _EMPTY_ONLY_KEYS = {"cursor"}  # Kalshi returns only cursor when portfolio is empty
             if data and not any(k in data for k in _KNOWN_POS_KEYS):
+                # If response only has pagination metadata (cursor), portfolio is empty — not a schema error
+                if set(data.keys()) <= _EMPTY_ONLY_KEYS:
+                    return  # Empty portfolio, schema is fine
                 raise RuntimeError(
                     f"SCHEMA DRIFT DETECTED: Kalshi API response contains none of the expected "
                     f"position keys {_KNOWN_POS_KEYS}. Got: {sorted(data.keys())}. "
