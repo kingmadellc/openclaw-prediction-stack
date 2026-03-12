@@ -15,8 +15,10 @@ Kill:   Set "enabled": false in config, or:
 """
 
 import argparse
+import fcntl
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -60,7 +62,7 @@ def load_config() -> dict:
 # ── State Logging ─────────────────────────────────────────────────────────
 
 def _log_state(event: str, data: dict):
-    """Append to auto_trader_state.jsonl."""
+    """Append to auto_trader_state.jsonl with file locking for atomic writes."""
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "event": event,
@@ -69,9 +71,15 @@ def _log_state(event: str, data: dict):
     try:
         STATE_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(STATE_LOG, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.write(json.dumps(entry) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+    except Exception as e:
+        logger.warning(f"Failed to write state log: {e}")
 
 
 # ── Safety Checks ─────────────────────────────────────────────────────────
@@ -79,8 +87,9 @@ def _log_state(event: str, data: dict):
 def get_current_positions(client) -> dict:
     """Fetch current Kalshi positions. Returns {ticker: {position, side}}.
 
-    Raises on auth/network errors so callers know positions fetch failed
-    vs. genuinely having zero positions.
+    Raises on ALL errors (auth, network, parse) so callers know positions
+    fetch failed vs. genuinely having zero positions. Swallowing errors here
+    causes duplicate position opening when the caller assumes zero positions.
     """
     positions = {}
     try:
@@ -90,9 +99,17 @@ def get_current_positions(client) -> dict:
         if hasattr(resp, 'status') and resp.status in (401, 403):
             raise RuntimeError(f"Kalshi auth failed (HTTP {resp.status}). Check api_key_id in config.yaml.")
         data = json.loads(raw)
-        for p in data.get("market_positions", []):
+        # SDK v3 returns "positions", v2 returns "market_positions"
+        positions_list = data.get("positions") or data.get("market_positions", [])
+        if not isinstance(positions_list, list):
+            raise RuntimeError(f"Unexpected positions response schema: got {type(positions_list).__name__}")
+        for p in positions_list:
             ticker = p.get("ticker", "")
-            qty = int(p.get("position", 0))
+            try:
+                qty = int(p.get("position", 0))
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Skipping malformed position entry for {ticker}: {e}")
+                continue
             if qty != 0:
                 positions[ticker] = {
                     "position": qty,
@@ -107,18 +124,24 @@ def get_current_positions(client) -> dict:
         if "401" in err_str or "403" in err_str or "unauthorized" in err_str or "forbidden" in err_str:
             logger.error(f"AUTH ERROR fetching positions: {e}")
             raise RuntimeError(f"Kalshi auth failed: {e}") from e
+        # CRITICAL: Do NOT swallow network/parse errors — raise so caller
+        # knows we failed to fetch positions (vs. genuinely having zero).
         logger.error(f"Failed to fetch positions: {e}")
+        raise RuntimeError(f"Cannot fetch positions (network/parse error): {e}") from e
     return positions
 
 
 def get_balance(client) -> float:
-    """Get available cash balance in USD."""
+    """Get available cash balance in USD.
+
+    Raises on failure — callers must know if balance is unknown vs. zero.
+    """
     try:
         balance_resp = client._portfolio_api.get_balance()
         return balance_resp.balance / 100.0
     except Exception as e:
         logger.error(f"Failed to fetch balance: {e}")
-        return 0.0
+        raise RuntimeError(f"Cannot fetch balance: {e}") from e
 
 
 def get_daily_pnl() -> float:
@@ -256,8 +279,13 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
     bankroll = auto_cfg.get("bankroll_usd", 100.0)
 
     # ── Pre-flight checks ─────────────────────────────────────────────
-    # Balance check
-    balance = get_balance(client)
+    # Balance check — must succeed or abort
+    try:
+        balance = get_balance(client)
+    except RuntimeError as e:
+        _log_state("abort", {"reason": f"Cannot fetch balance: {e}"})
+        logger.error(f"Aborting: cannot verify balance — {e}")
+        return {"trades_executed": 0, "trades_skipped": len(edges), "reason": "balance_fetch_failed"}
     if balance < 5.0:
         _log_state("abort", {"reason": f"Insufficient balance: ${balance:.2f}"})
         logger.warning(f"Aborting: balance ${balance:.2f} < $5 minimum")
@@ -270,8 +298,13 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
         logger.warning(f"Aborting: daily loss ${daily_pnl:.2f} exceeds -${max_daily_loss}")
         return {"trades_executed": 0, "trades_skipped": len(edges), "reason": "daily_loss_limit"}
 
-    # Current positions
-    positions = get_current_positions(client)
+    # Current positions — MUST succeed or we abort (prevents duplicate positions)
+    try:
+        positions = get_current_positions(client)
+    except RuntimeError as e:
+        _log_state("abort", {"reason": f"Cannot fetch positions: {e}"})
+        logger.error(f"Aborting: cannot verify current positions — {e}")
+        return {"trades_executed": 0, "trades_skipped": len(edges), "reason": "positions_fetch_failed"}
     num_positions = len(positions)
     exposure = get_portfolio_exposure(positions)
 
@@ -285,7 +318,8 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
     remaining_balance = balance
     executed_trades = []  # Track executed trades for alerts
 
-    for edge in edges[:10]:  # Top 10 by edge
+    for edge_idx, edge in enumerate(edges[:10], 1):  # Top 10 by edge
+        trade_start = time.perf_counter()
         ticker = edge.get("ticker", "")
         title = edge.get("title", "?")[:50]
         est_prob = edge.get("estimated_probability", 0.5)
@@ -293,6 +327,9 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
         confidence = edge.get("confidence", 0.3)
         effective_edge = edge.get("effective_edge_pct", 0)
         direction = edge.get("direction", "fair")
+
+        logger.info(f"[{edge_idx}/10] Processing: {title} ({ticker})")
+        logger.info(f"  Edge={effective_edge:.1f}%, mkt={market_price}¢, est={est_prob:.0%}, conf={confidence:.2f}")
 
         # Determine side
         side = "yes" if direction == "underpriced" else "no"
@@ -345,7 +382,11 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
             skipped += 1
             continue
 
+        logger.info(f"  Kelly: {result.contracts}x @ ${result.cost_usd:.2f} "
+                    f"(kelly={result.kelly_fraction:.4f}, frac={result.fractional_kelly:.4f})")
+
         if result.contracts <= 0:
+            logger.info(f"  → Skipped: {result.reason}")
             _log_state("edge_skipped", {"ticker": ticker, "reason": f"kelly_zero: {result.reason}",
                                         "edge": effective_edge})
             skipped += 1
@@ -433,8 +474,9 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
                 skipped += 1
 
         except Exception as e:
-            logger.error(f"Execution failed for {ticker}: {e}")
-            _log_state("edge_failed", {"ticker": ticker, "error": str(e)[:200]})
+            elapsed = time.perf_counter() - trade_start
+            logger.error(f"  Execution failed after {elapsed:.2f}s for {ticker}: {e}")
+            _log_state("edge_failed", {"ticker": ticker, "error": str(e)[:200], "elapsed_s": round(elapsed, 2)})
             errors.append(f"exec_error:{ticker}")
             skipped += 1
 
@@ -531,33 +573,97 @@ def run_auto_trader(dry_run: bool = False) -> dict:
             except Exception:
                 pass
 
+        # ── Check sports estimator availability ─────────────────────
+        sports_available = False
+        try:
+            from sports_estimator import (
+                is_sports_estimator_available, estimate_sports_market,
+                detect_sport, MARKET_SCOPE_SHORT, MARKET_SCOPE_PREMIUM_SHORT,
+            )
+            sports_available = is_sports_estimator_available()
+        except ImportError:
+            pass
+
+        # ── Phase 1: Fetch markets ─────────────────────────────────────
         logger.info("Phase 1: Fetching markets...")
-        markets = fetch_kalshi_markets(client, pipeline_cfg)
-        if not markets:
+        sports_markets = []
+        if sports_available:
+            result = fetch_kalshi_markets(client, pipeline_cfg, return_sports=True)
+            markets, sports_markets = result
+            logger.info(f"Market scope: {MARKET_SCOPE_PREMIUM_SHORT}")
+            logger.info(f"Sports markets collected: {len(sports_markets)}")
+        else:
+            markets = fetch_kalshi_markets(client, pipeline_cfg)
+            try:
+                logger.info(f"Market scope: {MARKET_SCOPE_SHORT}")
+            except NameError:
+                logger.info("Market scope: policy | politics | tech | economics | macro (sports excluded)")
+
+        if not markets and not sports_markets:
             logger.info("No markets passed filters")
             _log_state("scan_end", {"reason": "no_markets", "edges_found": 0})
             return {"status": "no_markets"}
 
-        # ── Phase 1.5: Sports routing (premium gate) ──────────────────
-        # Sports markets are blocked by _is_sports() in Phase 1 (fetch).
-        # If sports_estimator is available (premium), we could fetch sports
-        # markets separately and route them to the data-driven model.
-        # For now, log the scope for transparency.
-        try:
-            from sports_estimator import is_sports_estimator_available, MARKET_SCOPE_SHORT, MARKET_SCOPE_PREMIUM_SHORT
-            if is_sports_estimator_available():
-                logger.info(f"Market scope: {MARKET_SCOPE_PREMIUM_SHORT}")
-                # TODO: When sports estimator is production-ready:
-                # 1. Fetch sports markets (bypass _is_sports filter)
-                # 2. Route to estimate_sports_market()
-                # 3. Merge sports edges with macro edges below
-            else:
-                logger.info(f"Market scope: {MARKET_SCOPE_SHORT}")
-        except ImportError:
-            logger.info("Market scope: policy | politics | tech | economics | macro (sports excluded)")
+        # ── Phase 1.5: Sports estimation (premium) ─────────────────────
+        sports_edges = []
+        if sports_markets and sports_available:
+            logger.info(f"Phase 1.5: Estimating {len(sports_markets)} sports markets...")
+            for m in sports_markets:
+                try:
+                    ticker = m["ticker"]
+                    title = m["title"]
+                    price_cents = m["yes_price"]
+                    sport = detect_sport(ticker)
 
-        logger.info(f"Phase 3+4: Estimating edges for {len(markets)} markets...")
-        edges = calculate_edges(markets, pipeline_cfg)
+                    result = estimate_sports_market(
+                        ticker=ticker,
+                        title=title,
+                        market_price_cents=price_cents,
+                        sport=sport,
+                    )
+                    if result is None:
+                        continue
+
+                    est_prob = result["probability"]
+                    market_prob = price_cents / 100.0
+                    edge_pct = abs(est_prob - market_prob) * 100
+
+                    # Determine direction
+                    if est_prob > market_prob:
+                        direction = "underpriced"
+                    elif est_prob < market_prob:
+                        direction = "overpriced"
+                    else:
+                        direction = "fair"
+
+                    sports_edges.append({
+                        **m,
+                        "estimated_probability": est_prob,
+                        "confidence": result["confidence"],
+                        "reasoning": result.get("reasoning", ""),
+                        "edge_pct": round(edge_pct, 2),
+                        "effective_edge_pct": round(edge_pct, 2),
+                        "direction": direction,
+                        "source": "sports_estimator",
+                        "sport": result.get("sport", sport or "unknown"),
+                    })
+
+                except Exception as e:
+                    logger.warning(f"Sports estimation failed for {m.get('ticker', '?')}: {e}")
+                    continue
+
+            logger.info(f"Phase 1.5: {len(sports_edges)} sports edges found")
+
+        # ── Phase 3+4: Estimate macro edges ────────────────────────────
+        edges = []
+        if markets:
+            logger.info(f"Phase 3+4: Estimating edges for {len(markets)} markets...")
+            edges = calculate_edges(markets, pipeline_cfg)
+
+        # ── Merge sports + macro edges ─────────────────────────────────
+        if sports_edges:
+            edges = edges + sports_edges
+            logger.info(f"Merged: {len(edges)} total edges (macro + sports)")
 
         logger.info("Phase 4.5: Applying market filter...")
         edges = _apply_market_filter(edges, pipeline_cfg)

@@ -14,7 +14,6 @@ Outputs plain text to stdout (no markdown, no emojis — SMS/iMessage compatible
 import json
 import os
 import sys
-import shutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -30,47 +29,15 @@ except ImportError:
     yaml = None
 
 try:
-    from kalshi_python_sync import KalshiClient
+    from kalshi_python import KalshiClient
 except ImportError:
-    try:
-        from kalshi_python import KalshiClient
-    except ImportError:
-        KalshiClient = None
+    KalshiClient = None
 
 
 def log(msg, debug=False):
     """Log message to stderr if debug enabled."""
     if debug:
         print(f"[DEBUG] {msg}", file=sys.stderr)
-
-
-def _safe_load_json(filepath, default=None):
-    """Load JSON with corruption recovery.
-
-    Tries primary file, falls back to .bak if corrupted.
-    """
-    filepath = Path(filepath)
-    bak = filepath.with_suffix('.json.bak')
-
-    # Try primary file first
-    if filepath.exists():
-        try:
-            with open(filepath) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            log(f"Primary file corrupted ({filepath}): {e}", debug=False)
-
-    # Try backup file
-    if bak.exists():
-        try:
-            with open(bak) as f:
-                data = json.load(f)
-            log(f"Recovered from backup: {bak}", debug=False)
-            return data
-        except (json.JSONDecodeError, IOError) as e:
-            log(f"Backup also corrupted ({bak}): {e}", debug=False)
-
-    return default if default is not None else {}
 
 
 def format_time(ts_str):
@@ -83,18 +50,35 @@ def format_time(ts_str):
 
 
 def check_cache_age(cache_file, max_age_seconds):
-    """Check if cache is fresh. Returns ('fresh', age_secs) or ('stale', age_secs) or ('missing', 0)."""
+    """Check if cache is fresh. Returns ('fresh', age_secs) or ('stale', age_secs) or ('missing', 0).
+
+    Handles both ISO "cached_at" strings and unix epoch "timestamp" floats.
+    """
     try:
-        data = _safe_load_json(cache_file, default=None)
-        if data is None:
-            return "missing", 0
+        with open(cache_file) as f:
+            data = json.load(f)
 
+        # Try ISO "cached_at" first, then unix epoch "timestamp"
         cached_at = data.get("cached_at")
-        if not cached_at:
+        timestamp = data.get("timestamp")
+
+        if cached_at:
+            try:
+                dt = datetime.fromisoformat(cached_at.replace("Z", "+00:00"))
+                age_seconds = (datetime.now(timezone.utc) - dt).total_seconds()
+            except (ValueError, TypeError):
+                age_seconds = None
+        elif timestamp:
+            try:
+                import time as _time
+                age_seconds = _time.time() - float(timestamp)
+            except (ValueError, TypeError):
+                age_seconds = None
+        else:
             return "missing", 0
 
-        dt = datetime.fromisoformat(cached_at.replace("Z", "+00:00"))
-        age_seconds = (datetime.now(timezone.utc) - dt).total_seconds()
+        if age_seconds is None:
+            return "error", 0
 
         if age_seconds > max_age_seconds:
             return "stale", age_seconds
@@ -113,7 +97,21 @@ def format_portfolio_section(kalshi, config, debug=False):
         return "PORTFOLIO: unavailable (Kalshi API not configured)"
 
     try:
-        positions = kalshi.get_portfolio()
+        # Use get_positions() (correct SDK method), not get_portfolio()
+        try:
+            resp = kalshi.get_positions(limit=100, settlement_status="unsettled")
+        except (TypeError, Exception):
+            resp = kalshi.get_positions()
+
+        # Handle SDK v3 (.positions) and v2 (.market_positions)
+        if isinstance(resp, dict):
+            positions = resp.get("positions", resp.get("market_positions", []))
+        else:
+            positions = getattr(resp, "positions", None)
+            if positions is None:
+                positions = getattr(resp, "market_positions", [])
+            positions = positions or []
+
         if not positions:
             return "PORTFOLIO: (no positions)"
 
@@ -126,28 +124,23 @@ def format_portfolio_section(kalshi, config, debug=False):
             quantity = pos.get("quantity", 0)
             avg_price = pos.get("average_price", 0) / 100 if pos.get("average_price") else 0
 
-            # Get current price
+            # Fetch market data ONCE per ticker (not twice)
+            current_price = avg_price
+            days_to_exp = 0
             try:
                 market = kalshi.get_market(ticker)
-                current_price = market.get("last_price", avg_price) / 100 if market.get("last_price") else avg_price
-            except Exception:
-                current_price = avg_price
-
-            cost = quantity * avg_price
-            unrealized = quantity * (current_price - avg_price)
-            total_unrealized += unrealized
-
-            # Get expiration
-            try:
-                market = kalshi.get_market(ticker)
+                if market.get("last_price"):
+                    current_price = market["last_price"] / 100
                 exp_ts = market.get("close_datetime")
                 if exp_ts:
                     exp_dt = datetime.fromisoformat(exp_ts.replace("Z", "+00:00"))
                     days_to_exp = (exp_dt - datetime.now(timezone.utc)).days
-                else:
-                    days_to_exp = 0
             except Exception:
-                days_to_exp = 0
+                pass
+
+            cost = quantity * avg_price
+            unrealized = quantity * (current_price - avg_price)
+            total_unrealized += unrealized
 
             unrealized_str = f"+${unrealized:.0f}" if unrealized >= 0 else f"-${abs(unrealized):.0f}"
             line = f"{ticker:20} {side:3}  {quantity:3}@{current_price*100:.0f}¢  ${cost:.0f} cost  {unrealized_str:6} (exp: {days_to_exp}d)"
@@ -176,17 +169,14 @@ def format_kalshalyst_section(cache_path, config, debug=False):
         return "EDGES: unavailable (Kalshalyst data stale — check skill)"
 
     try:
-        data = _safe_load_json(cache_path, default=None)
-        if data is None:
-            return "EDGES: unavailable (cache corrupted — attempting recovery)"
+        with open(cache_path) as f:
+            data = json.load(f)
 
         insights = data.get("insights", [])[:3]
         if not insights:
             return "EDGES: none found"
 
-        # Market scope descriptor — tells users what categories are being scanned
-        scope = data.get("market_scope", "policy | politics | tech | economics | macro")
-        lines = [f"EDGES (Kalshalyst, top {len(insights)}):", f"  Scope: {scope}"]
+        lines = [f"EDGES (Kalshalyst, top {len(insights)}):"]
 
         for i, edge in enumerate(insights, 1):
             ticker = edge.get("ticker", "?")
@@ -222,24 +212,31 @@ def format_arbiter_section(cache_path, config, debug=False):
         return "DIVERGENCES: unavailable (Arbiter data stale)"
 
     try:
-        data = _safe_load_json(cache_path, default=None)
-        if data is None:
-            return "DIVERGENCES: unavailable (cache corrupted — attempting recovery)"
+        with open(cache_path) as f:
+            data = json.load(f)
 
-        divergences = data.get("divergences", [])[:2]
+        # Support both "divergences" (new) and "matches" (legacy) keys
+        divergences = data.get("divergences", data.get("matches", []))[:2]
         if not divergences:
             return "DIVERGENCES: none found today"
 
         lines = ["DIVERGENCES (Arbiter, Kalshi ↔ Polymarket):"]
 
         for div in divergences:
-            ticker = div.get("ticker", "?")
+            ticker = div.get("ticker", div.get("kalshi_title", "?"))[:20]
             kalshi_p = div.get("kalshi_price", 0)
-            pm_p = div.get("polymarket_price", 0)
-            spread_cents = div.get("spread_cents", 0)
+            pm_p = div.get("polymarket_price", div.get("pm_price", 0))
+
+            # Handle both 0-1 float (new) and integer cents (legacy)
+            if kalshi_p > 1:
+                kalshi_p = kalshi_p / 100.0
+            if pm_p > 1:
+                pm_p = pm_p / 100.0
+
+            spread_cents = div.get("spread_cents", div.get("delta", 0))
 
             lines.append(
-                f"{ticker:20}  Kalshi {kalshi_p*100:.0f}% ↔ PM {pm_p*100:.0f}%  (${spread_cents/100:.2f} spread)"
+                f"{ticker:20}  Kalshi {kalshi_p*100:.0f}% ↔ PM {pm_p*100:.0f}%  ({spread_cents}¢ spread)"
             )
 
         return "\n".join(lines)
@@ -357,11 +354,16 @@ def format_polymarket_section(config, debug=False):
         return "POLYMARKET: unavailable (requests library not installed)"
 
     try:
-        url = "https://clob.polymarket.com/markets?limit=100&order_by=volume"
-        resp = requests.get(url, timeout=5)
+        # Use Gamma API (market listing), not CLOB API (order-book focused)
+        url = "https://gamma-api.polymarket.com/markets?closed=false&limit=10&order=volume&ascending=false"
+        resp = requests.get(url, timeout=10, headers={
+            "Accept": "application/json",
+            "User-Agent": "OpenClaw-MorningBrief/1.0",
+        })
         resp.raise_for_status()
 
-        markets = resp.json().get("data", [])
+        data = resp.json()
+        markets = data if isinstance(data, list) else data.get("data", [])
         if not markets:
             return "POLYMARKET: no markets available"
 
@@ -371,15 +373,19 @@ def format_polymarket_section(config, debug=False):
         lines = ["POLYMARKET (top 3 by volume):"]
 
         for market in markets:
-            question = market.get("question", "?")[:50]  # Truncate long questions
-            volume = market.get("volume", 0)
+            question = market.get("question", market.get("title", "?"))[:50]
+            volume = float(market.get("volume", 0) or 0)
 
-            # Get implied probability from tokens
-            tokens = market.get("tokens", [])
-            if tokens:
-                # Use highest price as implied prob
-                prices = [float(t.get("price", 0)) for t in tokens]
-                implied_prob = max(prices) * 100 if prices else 50
+            # Get implied probability from outcomePrices
+            prices_raw = market.get("outcomePrices", "[]")
+            if isinstance(prices_raw, str):
+                try:
+                    prices_raw = json.loads(prices_raw)
+                except Exception:
+                    prices_raw = []
+
+            if prices_raw:
+                implied_prob = float(prices_raw[0]) * 100
             else:
                 implied_prob = 50
 
@@ -453,9 +459,9 @@ def load_config(config_path=None):
         "enabled": True,
         "kalshi": {"enabled": False},
         "cache_paths": {
-            "kalshalyst": "state/.kalshi_research_cache.json",
-            "arbiter": "state/.crossplatform_divergences.json",
-            "xpulse": "state/.x_signal_cache.json",
+            "kalshalyst": str(Path.home() / ".openclaw" / "state" / "kalshalyst_cache.json"),
+            "arbiter": str(Path.home() / ".openclaw" / "state" / "arbiter_cache.json"),
+            "xpulse": str(Path.home() / ".openclaw" / "state" / "x_signal_cache.json"),
         },
         "include": {
             "portfolio": True,

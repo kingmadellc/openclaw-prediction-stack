@@ -199,3 +199,15 @@ ls -la $KALSHI_KEY_PATH
 
 - For complete configuration reference, see [drift-config.md](references/drift-config.md)
 - For API details, consult [kalshi_python SDK docs](https://docs.kalshi.com)
+
+
+---
+
+## Feedback & Issues
+
+Found a bug? Have a feature request? Want to share results?
+
+- **GitHub Issues**: [github.com/kingmadellc/openclaw-prediction-stack/issues](https://github.com/kingmadellc/openclaw-prediction-stack/issues)
+- **X/Twitter**: [@KingMadeLLC](https://x.com/KingMadeLLC)
+
+Part of the **OpenClaw Prediction Stack** — the first prediction market skill suite on ClawHub.

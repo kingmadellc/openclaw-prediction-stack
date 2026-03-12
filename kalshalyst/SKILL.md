@@ -1,6 +1,7 @@
 ---
 name: Kalshalyst
 description: "Contrarian prediction market scanner that finds mispricings on Kalshi using Claude Sonnet analysis, Brier score calibration, and Kelly Criterion position sizing. Five-phase pipeline: fetch markets, classify, estimate contrarian probabilities, calculate edge, and alert. Tracks estimate accuracy over time so you know when to trust the signal. Part of the OpenClaw Prediction Market Trading Stack — feeds edge data to Market Morning Brief and pairs with Kalshi Command Center for execution."
+license: MIT
 ---
 
 # Kalshalyst — Contrarian Prediction Market Scanner
@@ -699,3 +700,15 @@ Kalshalyst is actively maintained. Common iteration paths:
 5. **Fallback Estimators:** Replace Qwen with custom local models or other APIs
 
 See the GitHub issues (if published) or contact the maintainer for feature requests.
+
+
+---
+
+## Feedback & Issues
+
+Found a bug? Have a feature request? Want to share results?
+
+- **GitHub Issues**: [github.com/kingmadellc/openclaw-prediction-stack/issues](https://github.com/kingmadellc/openclaw-prediction-stack/issues)
+- **X/Twitter**: [@KingMadeLLC](https://x.com/KingMadeLLC)
+
+Part of the **OpenClaw Prediction Stack** — the first prediction market skill suite on ClawHub.

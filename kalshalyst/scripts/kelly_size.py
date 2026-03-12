@@ -9,23 +9,19 @@ Implements fractional Kelly to determine optimal position size given:
 Binary outcome assumption: Kalshi markets resolve YES (1) or NO (0).
 Uses fractional Kelly (α = 0.25 default) for noise robustness.
 
-Supports config override via ~/kelly_config.json for tuned parameters.
-
 Usage:
     python kelly_size.py [options]
 """
 
-import json
 import math
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-# ── Default Configuration ──────────────────────────────────────────────────
+# ── Configuration ──────────────────────────────────────────────────────────
 
 DEFAULT_ALPHA = 0.25
 MIN_EDGE_FOR_SIZING = 0.03
@@ -33,39 +29,6 @@ MAX_CONTRACTS_PER_TRADE = 100
 MAX_COST_PER_TRADE_USD = 25.00
 MIN_CONTRACTS = 1
 CONFIDENCE_EXPONENT = 2.0
-
-
-def _load_kelly_config() -> dict:
-    """Load Kelly config overrides from kelly_config.json if available.
-
-    Checks ~/kelly_config.json and ~/prompt-lab/kelly_config.json.
-    Returns dict of overrides, or empty dict if no config found.
-    """
-    config_paths = [
-        Path.home() / "kelly_config.json",
-        Path.home() / "prompt-lab" / "kelly_config.json",
-    ]
-    for path in config_paths:
-        try:
-            if path.exists():
-                cfg = json.loads(path.read_text())
-                logger.info(f"Loaded Kelly config from {path}")
-                return cfg
-        except Exception as e:
-            logger.debug(f"Could not load Kelly config from {path}: {e}")
-    return {}
-
-
-# Load overrides at module level
-_CONFIG = _load_kelly_config()
-if _CONFIG:
-    DEFAULT_ALPHA = _CONFIG.get("alpha", DEFAULT_ALPHA)
-    CONFIDENCE_EXPONENT = _CONFIG.get("confidence_exponent", CONFIDENCE_EXPONENT)
-    MIN_EDGE_FOR_SIZING = _CONFIG.get("min_edge_for_sizing", MIN_EDGE_FOR_SIZING)
-    MAX_COST_PER_TRADE_USD = _CONFIG.get("max_cost_per_trade_usd", MAX_COST_PER_TRADE_USD)
-    MAX_CONTRACTS_PER_TRADE = _CONFIG.get("max_contracts_per_trade", MAX_CONTRACTS_PER_TRADE)
-    logger.info(f"Kelly overrides: α={DEFAULT_ALPHA}, conf_exp={CONFIDENCE_EXPONENT}, "
-                f"min_edge={MIN_EDGE_FOR_SIZING}, max_cost=${MAX_COST_PER_TRADE_USD}")
 
 
 @dataclass
@@ -269,7 +232,7 @@ if __name__ == "__main__":
         estimated_prob=0.62,
         market_price_cents=48,
         confidence=0.68,
-        bankroll_usd=100.0,
+        bankroll_usd=200.0,
         side="yes",
     )
 

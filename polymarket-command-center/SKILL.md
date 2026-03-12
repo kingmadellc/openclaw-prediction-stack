@@ -381,3 +381,15 @@ clawhub install kalshalyst kalshi-command-center polymarket-command-center predi
 - CLOB midpoint integration
 - Zero API key required
 - 100% read-only (no trading)
+
+
+---
+
+## Feedback & Issues
+
+Found a bug? Have a feature request? Want to share results?
+
+- **GitHub Issues**: [github.com/kingmadellc/openclaw-prediction-stack/issues](https://github.com/kingmadellc/openclaw-prediction-stack/issues)
+- **X/Twitter**: [@KingMadeLLC](https://x.com/KingMadeLLC)
+
+Part of the **OpenClaw Prediction Stack** — the first prediction market skill suite on ClawHub.

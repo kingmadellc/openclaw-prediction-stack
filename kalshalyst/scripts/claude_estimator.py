@@ -1,4 +1,4 @@
-"""Claude contrarian probability estimation for prediction markets.
+"""Claude Sonnet contrarian probability estimation for prediction markets.
 
 CONTRARIAN MODE: Claude sees the market price and is asked to find reasons
 the market is WRONG. This produces opinionated, directional recommendations
@@ -6,195 +6,91 @@ instead of consensus-matching estimates that yield zero edge.
 
 Assumes limit orders (no spread penalty). Edge = |estimate - market price|.
 
-Primary: Claude Code CLI (`claude -p`) — routes through Max subscription at $0 cost.
-Fallback 1: Anthropic API (requires ANTHROPIC_API_KEY).
-Fallback 2: Local Qwen via Ollama.
+Falls back to local Qwen if Claude is unavailable (cooldown/offline).
 """
 
 import json
-import re
-import subprocess
 import time
 import logging
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Model Configuration ──────────────────────────────────────────────────
-CLAUDE_CLI_MODEL = "opus"           # Best model via Max subscription
-CLAUDE_API_MODEL = "claude-sonnet-4-5-20250514"  # API fallback
-CLAUDE_CLI_TIMEOUT = 60             # seconds per market
 
+# ── Claude Interface ──────────────────────────────────────────────────────
 
-# ── Claude Code CLI Interface (Primary — Max subscription) ────────────────
+def _claude_estimate(prompt: str, system: str, timeout: int = 45) -> Optional[dict]:
+    """Call Claude Sonnet via Anthropic API for a probability estimate.
 
-def _claude_cli_estimate(prompt: str, system: str, timeout: int = CLAUDE_CLI_TIMEOUT) -> Optional[dict]:
-    """Call Claude via Claude Code CLI (`claude -p`). Uses Max subscription — $0 cost.
-
-    Returns parsed JSON dict or None on failure.
+    Requires ANTHROPIC_API_KEY in environment.
     """
-    try:
-        full_prompt = f"SYSTEM INSTRUCTIONS:\n{system}\n\n---\n\n{prompt}"
-
-        result = subprocess.run(
-            ["claude", "-p", full_prompt, "--model", CLAUDE_CLI_MODEL],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(Path.home()),
-            start_new_session=True,  # Prevents SIGTTOU when backgrounded
-        )
-
-        if result.returncode != 0:
-            stderr = result.stderr.strip()[:200]
-            if stderr:
-                logger.warning(f"Claude CLI error: {stderr}")
-            return None
-
-        text = result.stdout.strip()
-        if not text:
-            return None
-
-        # Strip markdown fences
-        text = re.sub(r"```(?:json)?\s*", "", text)
-        text = re.sub(r"```\s*", "", text)
-        text = text.strip()
-
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                return json.loads(text[start:end])
-
-        logger.warning("Claude CLI: failed to parse JSON")
-        return None
-
-    except FileNotFoundError:
-        logger.info("Claude CLI not installed — falling back to API")
-        return None
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Claude CLI timeout ({timeout}s)")
-        return None
-    except Exception as e:
-        logger.error(f"Claude CLI error: {str(e)[:200]}")
-        return None
-
-
-# ── Anthropic API Interface (Fallback) ────────────────────────────────────
-
-def _claude_api_estimate(prompt: str, system: str, timeout: int = 45) -> Optional[dict]:
-    """Call Claude via Anthropic API. Requires ANTHROPIC_API_KEY in environment."""
     try:
         import anthropic
 
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY from env
 
         message = client.messages.create(
-            model=CLAUDE_API_MODEL,
+            model="claude-sonnet-4-5",
             max_tokens=512,
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
 
+        # Extract text
         text = ""
         for block in message.content:
             if hasattr(block, "text"):
                 text += block.text
 
         if not text:
-            logger.warning("Claude API: empty response")
+            logger.warning("Claude: empty response")
             return None
 
+        # Parse JSON
         text = text.strip()
         try:
             return json.loads(text)
         except json.JSONDecodeError:
+            # Try to extract JSON from response
             start = text.find("{")
             end = text.rfind("}") + 1
             if start >= 0 and end > start:
                 return json.loads(text[start:end])
 
-        logger.warning("Claude API: failed to parse JSON")
+        logger.warning("Claude: failed to parse JSON from response")
         return None
 
     except Exception as e:
         error_str = str(e)
         if "api_key" in error_str.lower() or "auth" in error_str.lower():
-            logger.error(f"Claude API: auth error — check ANTHROPIC_API_KEY")
+            logger.error(f"Claude: auth error — check ANTHROPIC_API_KEY (error: {error_str[:80]})")
         else:
-            logger.error(f"Claude API error: {error_str[:200]}")
+            logger.error(f"Claude error: {error_str[:200]}")
         return None
-
-
-def _claude_estimate(prompt: str, system: str, timeout: int = 60) -> Optional[dict]:
-    """Try Claude CLI first (Max subscription), fall back to API."""
-    # Primary: Claude Code CLI (free via Max)
-    result = _claude_cli_estimate(prompt, system, timeout)
-    if result:
-        return result
-
-    # Fallback: Anthropic API
-    logger.info("Falling back to Claude API")
-    return _claude_api_estimate(prompt, system, timeout)
 
 
 # ── System Prompt ──────────────────────────────────────────────────────────
 
-def _load_system_prompt() -> str:
-    """Load system prompt from prompt.md if available, otherwise use built-in.
+_SYSTEM_PROMPT = """You are a contrarian prediction market analyst. You look for reasons markets are WRONG.
 
-    Checks for custom prompt override at ~/prompt-lab/prompt.md first.
-    Falls back to built-in prompt if file not found.
-    """
-    # Try custom prompt override (user-optimized)
-    prompt_paths = [
-        Path.home() / "prompt-lab" / "prompt.md",
-        Path(__file__).parent / "prompt.md",
-    ]
+Your job: given a prediction market and its current price, determine if there's a directional opportunity. You are advising a sophisticated trader who uses limit orders.
 
-    for path in prompt_paths:
-        try:
-            if path.exists():
-                text = path.read_text()
-                parts = text.split("---", 1)
-                if len(parts) > 1:
-                    prompt = parts[1].strip()
-                    if len(prompt) > 50:  # Sanity check
-                        logger.info(f"Loaded custom prompt from {path}")
-                        return prompt
-        except Exception as e:
-            logger.debug(f"Could not load prompt from {path}: {e}")
-
-    # Built-in prompt (default for distribution)
-    # Users: place your optimized prompt at ~/prompt-lab/prompt.md
-    logger.info("Using built-in estimation prompt")
-    return _BUILTIN_SYSTEM_PROMPT
-
-
-_BUILTIN_SYSTEM_PROMPT = """You are a calibrated probability estimator for prediction markets. Your job is to estimate the true probability of an event, using the market price as your primary anchor.
-
-APPROACH:
-1. Start with the market price as your baseline — the market is usually right.
-2. Adjust based on your analysis of the question, context, and any information the market may be underweighting.
-3. Stay close to the market price unless you have strong reason to diverge. Most adjustments should be 3-10 points.
-
-CALIBRATION GUIDELINES:
-- If the market price is below 50%, the event is more likely NOT to happen. Your estimate should generally be at or below the market price.
-- If the market price is above 50%, the event is more likely to happen. Your estimate should generally be at or above the market price.
-- Avoid estimates of exactly 50% — take a position.
-- Be cautious about large divergences from the market. Moves of more than 15 points require very strong justification.
-
-REASONING PROCESS:
-- Consider base rates: how often do events like this actually happen?
-- Consider information asymmetry: does the market have access to information you don't?
-- Consider status quo bias: existing conditions tend to persist.
-- Consider time horizon: closer deadlines make outcomes more predictable.
+CRITICAL RULES:
+1. You WILL be shown the current market price. Your job is to DISAGREE with it when you have reason to.
+2. Don't just confirm the market. That's worthless. Look for what the market is MISSING or LAGGING on.
+3. Consider: breaking news the market hasn't priced, political dynamics shifting, timing mismatches, crowd psychology errors, base rate neglect by the market.
+4. Be opinionated. A 50% estimate on a 50% market is useless. Either find a reason it's wrong or say confidence is low.
+5. Weight recent developments HEAVILY — markets are often slow to react to news in the last 24-48 hours.
+6. Think about asymmetric upside: where is the cost of being wrong low but the payoff of being right high?
 
 You must respond with ONLY a JSON object, no other text:
-{"estimated_probability": 0.XX, "confidence": 0.XX, "reasoning": "one sentence", "key_factors": ["f1","f2","f3"], "conviction": "strong|moderate|weak"}"""
+{
+  "estimated_probability": <float 0.01-0.99>,
+  "confidence": <float 0.0-1.0>,
+  "reasoning": "<one sentence explaining WHY the market is wrong>",
+  "key_factors": ["<factor 1>", "<factor 2>", "<factor 3>"],
+  "conviction": "<strong|moderate|weak>"
+}"""
 
 
 # ── Probability Estimation ──────────────────────────────────────────────
@@ -272,8 +168,7 @@ TIME TO RESOLUTION: {days_str}{price_str}
 
 Is the market mispricing this? Give your true probability estimate and explain why the market is wrong (or say confidence is low if you agree with the market). Respond with JSON only."""
 
-    system_prompt = _load_system_prompt()
-    result = _claude_estimate(prompt, system_prompt)
+    result = _claude_estimate(prompt, _SYSTEM_PROMPT)
     if not result:
         return None
 

@@ -29,12 +29,9 @@ except ImportError:
     yaml = None
 
 try:
-    from kalshi_python_sync import KalshiClient
+    from kalshi_python import KalshiClient
 except ImportError:
-    try:
-        from kalshi_python import KalshiClient
-    except ImportError:
-        KalshiClient = None
+    KalshiClient = None
 
 
 # ============================================================================
@@ -336,19 +333,55 @@ def check_cross_platform(
                     "match_score": round(score, 2),
                 })
 
-    # Save to cache
-    cache_path = Path.home() / ".arbiter_cache.json"
+    # Save to cache — standardized schema for morning-brief consumption
+    cache_dir = Path.home() / ".openclaw" / "state"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / "arbiter_cache.json"
     try:
+        # Convert divergences to morning-brief compatible format:
+        # - key: "divergences" (not "matches")
+        # - prices as 0-1 floats (not integer cents)
+        # - "cached_at" as ISO timestamp (not unix epoch)
+        # - include "ticker", "polymarket_price", "spread_cents" keys
+        normalized = []
+        for d in divergences[:20]:
+            normalized.append({
+                "ticker": d.get("kalshi_title", "?")[:40],
+                "kalshi_title": d["kalshi_title"],
+                "pm_title": d["pm_title"],
+                "kalshi_price": d["kalshi_price"] / 100.0,  # cents → 0-1 float
+                "polymarket_price": d["pm_price"] / 100.0,  # cents → 0-1 float
+                "pm_price": d["pm_price"] / 100.0,
+                "delta": d["delta"],
+                "delta_pct": d["delta_pct"],
+                "spread_cents": d["delta"],
+                "match_score": d["match_score"],
+            })
+
         with open(cache_path, "w") as f:
+            json.dump({
+                "divergences": normalized,
+                "kalshi_count": len(kalshi_markets),
+                "pm_count": len(pm_markets),
+                "cached_at": datetime.now().astimezone().isoformat(),
+                "timestamp": time.time(),
+            }, f, indent=2)
+        logger.debug(f"Cached results to {cache_path}")
+    except OSError as e:
+        logger.warning(f"Could not write cache: {e}")
+
+    # Also write legacy path for backward compat
+    legacy_cache = Path.home() / ".arbiter_cache.json"
+    try:
+        with open(legacy_cache, "w") as f:
             json.dump({
                 "matches": divergences[:20],
                 "kalshi_count": len(kalshi_markets),
                 "pm_count": len(pm_markets),
                 "timestamp": time.time(),
             }, f, indent=2)
-        logger.debug(f"Cached results to {cache_path}")
-    except OSError as e:
-        logger.warning(f"Could not write cache: {e}")
+    except OSError:
+        pass
 
     logger.info(f"Comparator: {len(divergences)} divergences >= {threshold}%")
 

@@ -14,9 +14,6 @@ The news variant includes:
 - News history persistence in ~/.openclaw/state/evening_news_history.json (48h rolling, max 200 entries)
 - Category icons: policy 🏛️, markets 📈, technology 💻, geopolitics 🌍
 
-Uses robust JSON parsing to handle Qwen output in multiple formats:
-- Raw JSON, markdown code blocks, wrapped JSON, manual key-value extraction
-
 Usage:
     python evening_brief.py [--mode {market|news}] [--config CONFIG] [--force] [--dry-run] [--debug]
     python evening_brief.py --mode news --topics "crypto,AI,Fed" --min-confidence 0.8
@@ -26,21 +23,13 @@ Usage:
 Outputs plain text to stdout (no markdown, no emojis — SMS/iMessage compatible).
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess
 import sys
 import time
-import shutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-
-try:
-    from json_utils import safe_parse_json
-except ImportError:
-    safe_parse_json = None
 
 # Optional dependencies
 try:
@@ -54,12 +43,9 @@ except ImportError:
     yaml = None
 
 try:
-    from kalshi_python_sync import KalshiClient
+    from kalshi_python import KalshiClient
 except ImportError:
-    try:
-        from kalshi_python import KalshiClient
-    except ImportError:
-        KalshiClient = None
+    KalshiClient = None
 
 
 def log(msg, debug=False):
@@ -68,96 +54,11 @@ def log(msg, debug=False):
         print(f"[DEBUG] {msg}", file=sys.stderr)
 
 
-def _safe_load_json(filepath, default=None):
-    """Load JSON with corruption recovery.
-
-    Tries primary file, falls back to .bak if corrupted.
-    """
-    filepath = Path(filepath)
-    bak = filepath.with_suffix('.json.bak')
-
-    # Try primary file first
-    if filepath.exists():
-        try:
-            with open(filepath) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            log(f"Primary file corrupted ({filepath}): {e}", debug=False)
-
-    # Try backup file
-    if bak.exists():
-        try:
-            with open(bak) as f:
-                data = json.load(f)
-            log(f"Recovered from backup: {bak}", debug=False)
-            return data
-        except (json.JSONDecodeError, IOError) as e:
-            log(f"Backup also corrupted ({bak}): {e}", debug=False)
-
-    return default if default is not None else {}
-
-
-def _safe_save_json(filepath, data):
-    """Save JSON with backup rotation."""
-    filepath = Path(filepath)
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    bak = filepath.with_suffix('.json.bak')
-
-    # Rotate backup: current → backup
-    if filepath.exists():
-        try:
-            shutil.copy2(filepath, bak)
-        except IOError as e:
-            log(f"Failed to create backup {bak}: {e}", debug=False)
-
-    # Write new primary file
-    try:
-        with open(filepath, 'w') as f:
-            json.dump(data, f, indent=2)
-    except IOError as e:
-        log(f"Failed to save state to {filepath}: {e}", debug=False)
-
-
-def _parse_json_safe(text):
-    """Parse JSON from text, extracting from curly braces if needed."""
-    text = text.strip()
-    # Try direct parse first
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    # Try extracting from curly braces
-    try:
-        start = text.find('{')
-        end = text.rfind('}') + 1
-        if start >= 0 and end > start:
-            return json.loads(text[start:end])
-    except json.JSONDecodeError:
-        pass
-    return None
-
-
-def safe_parse_json(text: str, fallback=None, logger_prefix: str = ""):
-    """Parse JSON from text, extracting from curly braces if needed.
-
-    Args:
-        text: Text potentially containing JSON
-        fallback: Default value if parsing fails
-        logger_prefix: Prefix for debug logging (unused but kept for API compatibility)
-
-    Returns:
-        Parsed JSON dict or fallback value
-    """
-    result = _parse_json_safe(text)
-    return result if result is not None else fallback
-
-
 def check_cache_age(cache_file, max_age_seconds):
     """Check if cache is fresh. Returns ('fresh', age_secs) or ('stale', age_secs) or ('missing', 0)."""
     try:
-        data = _safe_load_json(cache_file, default=None)
-        if data is None:
-            return "missing", 0
+        with open(cache_file) as f:
+            data = json.load(f)
 
         cached_at = data.get("cached_at")
         if not cached_at:
@@ -270,9 +171,8 @@ def format_xsignals_today_section(cache_path, config, debug=False):
         return "X SIGNALS TODAY: (none)"
 
     try:
-        data = _safe_load_json(cache_path, default=None)
-        if data is None:
-            return "X SIGNALS TODAY: (unavailable — cache corrupted)"
+        with open(cache_path) as f:
+            data = json.load(f)
 
         now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -399,10 +299,7 @@ def _search_news(topics, max_per_topic=3, debug=False):
 
 
 def _analyze_relevance_local(articles, debug=False):
-    """Stage 1: Analyze articles for relevance and significance using local Qwen.
-
-    Uses robust JSON parsing to handle Qwen output in multiple formats.
-    """
+    """Stage 1: Analyze articles for relevance and significance using local Qwen."""
     if not articles:
         return []
 
@@ -442,17 +339,7 @@ def _analyze_relevance_local(articles, debug=False):
                 log(f"  Stage 1: Qwen failed for '{title[:50]}...'", debug)
                 continue
 
-            # Use robust JSON parsing instead of direct json.loads()
-            parsed = safe_parse_json(
-                result.stdout.strip(),
-                fallback=None,
-                logger_prefix=f"[Stage1: {title[:30]}]"
-            )
-
-            if not parsed:
-                log(f"  Stage 1: JSON parse failed for '{title[:50]}...'", debug)
-                continue
-
+            parsed = json.loads(result.stdout.strip())
             if parsed.get("is_significant", False):
                 article["confidence"] = float(parsed.get("confidence", 0))
                 article["category"] = parsed.get("category", "other")
@@ -476,31 +363,35 @@ def _load_news_history(history_path=None, debug=False):
     else:
         history_path = Path(history_path)
 
-    data = _safe_load_json(history_path, default=None)
-    if data is None:
-        log("No history found or error reading history (attempting recovery)", debug)
+    try:
+        with open(history_path) as f:
+            data = json.load(f)
+            # Only keep last 48h of history
+            cutoff = time.time() - 48 * 3600
+            kept = [h for h in data if h.get("timestamp", 0) > cutoff]
+            log(f"Loaded {len(kept)} articles from 48h history", debug)
+            return kept
+    except (OSError, json.JSONDecodeError):
+        log("No history found or error reading history", debug)
         return []
-
-    if not isinstance(data, list):
-        return []
-
-    # Only keep last 48h of history
-    cutoff = time.time() - 48 * 3600
-    kept = [h for h in data if h.get("timestamp", 0) > cutoff]
-    log(f"Loaded {len(kept)} articles from 48h history", debug)
-    return kept
 
 
 def _save_news_history(history, history_path=None, debug=False):
-    """Persist sent news history (max 200 entries, 48h rolling) with backup rotation."""
+    """Persist sent news history (max 200 entries, 48h rolling)."""
     if not history_path:
         history_path = Path.home() / ".openclaw" / "state" / "evening_news_history.json"
     else:
         history_path = Path(history_path)
 
-    # Keep max 200 entries
-    _safe_save_json(history_path, history[-200:])
-    log(f"Saved {len(history[-200:])} articles to history", debug)
+    try:
+        # Ensure directory exists
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        # Keep max 200 entries
+        with open(history_path, "w") as f:
+            json.dump(history[-200:], f, indent=2)
+        log(f"Saved {len(history[-200:])} articles to history", debug)
+    except OSError as e:
+        log(f"Error saving history: {e}", debug)
 
 
 def _filter_material_news(articles, history, debug=False):
@@ -508,7 +399,6 @@ def _filter_material_news(articles, history, debug=False):
 
     Compares candidate articles against recently sent history.
     Returns only articles that represent genuinely new, material developments.
-    Uses robust JSON parsing to handle Qwen output in multiple formats.
     """
     if not articles:
         return []
@@ -558,17 +448,7 @@ def _filter_material_news(articles, history, debug=False):
             log("Stage 2 filter: Qwen failed, dropping all articles (fail-closed)", debug)
             return []  # Fail closed — silence over noise when filter is broken
 
-        # Use robust JSON parsing instead of direct json.loads()
-        parsed = safe_parse_json(
-            result.stdout.strip(),
-            fallback=None,
-            logger_prefix="[Stage2]"
-        )
-
-        if not parsed:
-            log("Stage 2 filter: JSON parse failed, dropping all articles (fail-closed)", debug)
-            return []  # Fail closed — silence over noise when JSON is malformed
-
+        parsed = json.loads(result.stdout.strip())
         keep_titles = set(parsed.get("keep", []))
         reasoning = parsed.get("reasoning", "")
 

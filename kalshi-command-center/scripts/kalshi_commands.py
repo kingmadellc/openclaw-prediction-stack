@@ -126,6 +126,10 @@ def _get_client(*, _retries: int = 1, _backoff: float = 2.0):
                 config.private_key_pem = f.read()
             config.api_key_id = KEY_ID
             client = KalshiClient(config)
+            # Clear PEM from config object after client init — no reason to keep
+            # the private key in memory longer than needed.
+            config.private_key_pem = None
+
             # Verify auth — try public method first, fall back to internal API
             try:
                 client.get_positions(limit=1)
@@ -173,7 +177,8 @@ def _classify_kalshi_error(error) -> str:
 
 
 def _trade_audit(event: str, data: dict):
-    """Append-only trade audit log."""
+    """Append-only trade audit log with file locking for atomic writes."""
+    import fcntl
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "event": event,
@@ -182,9 +187,15 @@ def _trade_audit(event: str, data: dict):
     try:
         TRADE_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(TRADE_LOG, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.write(json.dumps(entry) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+    except Exception as e:
+        logger.warning(f"Failed to write trade audit log: {e}")
 
 
 def _check_risk(cost: float, quantity: int):

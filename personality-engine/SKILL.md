@@ -536,3 +536,15 @@ Part of the OpenClaw portfolio. Use freely in any agent.
 - Initial 6-system framework
 - Default configuration tuned for prediction market trading agents
 - All systems designed for domain adaptation — swap voice pools, thresholds, and micro-initiation conditions for any use case
+
+
+---
+
+## Feedback & Issues
+
+Found a bug? Have a feature request? Want to share results?
+
+- **GitHub Issues**: [github.com/kingmadellc/openclaw-prediction-stack/issues](https://github.com/kingmadellc/openclaw-prediction-stack/issues)
+- **X/Twitter**: [@KingMadeLLC](https://x.com/KingMadeLLC)
+
+Part of the **OpenClaw Prediction Stack** — the first prediction market skill suite on ClawHub.

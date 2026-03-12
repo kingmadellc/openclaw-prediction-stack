@@ -448,3 +448,15 @@ Common iteration paths:
 ## License & Attribution
 
 **Author**: KingMadeLLC
+
+
+---
+
+## Feedback & Issues
+
+Found a bug? Have a feature request? Want to share results?
+
+- **GitHub Issues**: [github.com/kingmadellc/openclaw-prediction-stack/issues](https://github.com/kingmadellc/openclaw-prediction-stack/issues)
+- **X/Twitter**: [@KingMadeLLC](https://x.com/KingMadeLLC)
+
+Part of the **OpenClaw Prediction Stack** — the first prediction market skill suite on ClawHub.

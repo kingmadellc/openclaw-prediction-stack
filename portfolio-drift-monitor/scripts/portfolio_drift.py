@@ -18,104 +18,43 @@ State file:
 import os
 import json
 import sys
-import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Tuple
 
 try:
-    from kalshi_python_sync import KalshiClient
+    from kalshi_python_sync import Configuration, KalshiClient
 except ImportError:
     try:
-        from kalshi_python import KalshiClient
+        from kalshi_python import Configuration, KalshiClient
     except ImportError:
-        print("ERROR: Neither kalshi_python_sync nor kalshi_python found. Install with: pip install kalshi-python-sync")
+        print("ERROR: Neither kalshi_python_sync nor kalshi_python found.")
         sys.exit(1)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# State File Recovery Helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
-def safe_load_state(filepath: Path, default: Any = None) -> Any:
-    """Load JSON state file with corruption recovery.
-
-    Tries to load primary file first, falls back to .bak if primary is corrupted.
-
-    Args:
-        filepath: Path to JSON state file
-        default: Default value if both files fail or don't exist
-
-    Returns:
-        Loaded data, or default if unable to load
-    """
-    bak = filepath.with_suffix('.json.bak')
-
-    # Try primary file first
-    if filepath.exists():
-        try:
-            with open(filepath) as f:
-                data = json.load(f)
-            return data
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"WARNING: Primary state file corrupted ({filepath}): {e}")
-
-    # Try backup file
-    if bak.exists():
-        try:
-            with open(bak) as f:
-                data = json.load(f)
-            print(f"RECOVERED: Loaded backup state from {bak}")
-            return data
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"WARNING: Backup state file also corrupted ({bak}): {e}")
-
-    # Return default
-    default_value = default if default is not None else {}
-    return default_value
-
-
-def safe_save_state(filepath: Path, data: Any) -> None:
-    """Save JSON state with backup rotation.
-
-    Before writing new state, copies current file to .bak for recovery.
-
-    Args:
-        filepath: Path to JSON state file
-        data: Data to save
-    """
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    bak = filepath.with_suffix('.json.bak')
-
-    # Rotate backup: current → backup
-    if filepath.exists():
-        try:
-            shutil.copy2(filepath, bak)
-        except IOError as e:
-            print(f"WARNING: Failed to create backup {bak}: {e}")
-
-    # Write new primary file
-    try:
-        with open(filepath, 'w') as f:
-            json.dump(data, f, indent=2)
-    except IOError as e:
-        print(f"ERROR: Failed to save state to {filepath}: {e}")
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 
 class PortfolioDriftMonitor:
     """Monitors Kalshi portfolio drift with rate limiting and threshold alerts."""
 
     def __init__(self):
-        """Initialize monitor with configuration from environment."""
-        self.key_id = os.getenv("KALSHI_KEY_ID")
-        self.key_path = os.getenv("KALSHI_KEY_PATH")
+        """Initialize monitor with configuration from config.yaml (env vars as fallback)."""
+        # Load from config.yaml first, env vars as fallback
+        config = self._load_config()
+        kalshi_cfg = config.get("kalshi", {})
+
+        self.key_id = kalshi_cfg.get("api_key_id") or os.getenv("KALSHI_KEY_ID")
+        self.key_path = kalshi_cfg.get("private_key_file") or os.getenv("KALSHI_KEY_PATH")
         self.threshold_pct = float(os.getenv("PORTFOLIO_DRIFT_THRESHOLD", "5.0"))
         self.interval_minutes = int(os.getenv("PORTFOLIO_DRIFT_INTERVAL", "60"))
 
         # Validate credentials
         if not self.key_id or not self.key_path:
             raise ValueError(
-                "KALSHI_KEY_ID and KALSHI_KEY_PATH environment variables required"
+                "Kalshi credentials required in ~/.openclaw/config.yaml or env vars"
             )
 
         if not os.path.exists(self.key_path):
@@ -126,40 +65,87 @@ class PortfolioDriftMonitor:
         self.state_file = self.state_dir / "portfolio_snapshot.json"
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize Kalshi client
+        # Initialize Kalshi client (v3 SDK pattern)
         try:
-            self.client = KalshiClient(
-                key_id=self.key_id,
-                key_path=self.key_path,
-                base_url="https://api.kalshi.com/trade-api/v2"
+            with open(self.key_path) as f:
+                private_key = f.read()
+
+            config_obj = Configuration(
+                host="https://api.elections.kalshi.com/trade-api/v2"
             )
+            config_obj.api_key_id = self.key_id
+            config_obj.private_key_pem = private_key
+            self.client = KalshiClient(config_obj)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Kalshi client: {e}")
 
+    @staticmethod
+    def _load_config() -> dict:
+        """Load config from ~/.openclaw/config.yaml."""
+        config_path = Path.home() / ".openclaw" / "config.yaml"
+        if config_path.exists() and yaml:
+            with open(config_path) as f:
+                return yaml.safe_load(f) or {}
+        return {}
+
     def get_current_portfolio(self) -> Dict[str, Any]:
         """
-        Fetch current portfolio from Kalshi API.
+        Fetch current portfolio from Kalshi API using get_positions().
+
+        Handles SDK v3 (.positions) and v2 (.market_positions) response formats.
 
         Returns:
             Dict with portfolio metadata and positions indexed by market symbol
         """
         try:
-            response = self.client.get_portfolio()
+            # Use get_positions() — the correct SDK method (not get_portfolio())
+            try:
+                response = self.client.get_positions(limit=100, settlement_status="unsettled")
+            except (TypeError, Exception):
+                response = self.client.get_positions()
 
-            # Extract positions and index by market symbol
+            # Extract positions list — handle SDK v3 (.positions) and v2 (.market_positions)
+            raw_positions = []
+            if isinstance(response, dict):
+                raw_positions = response.get("positions", response.get("market_positions", []))
+            else:
+                # SDK object — try .positions first (v3), then .market_positions (v2)
+                raw_positions = getattr(response, "positions", None)
+                if raw_positions is None:
+                    raw_positions = getattr(response, "market_positions", None)
+                if raw_positions is None:
+                    try:
+                        d = response.to_dict() if hasattr(response, "to_dict") else vars(response)
+                        raw_positions = d.get("positions", d.get("market_positions", []))
+                    except Exception:
+                        raw_positions = []
+                raw_positions = raw_positions or []
+
+            # Index by market ticker
             positions = {}
-            if response and "positions" in response:
-                for position in response["positions"]:
-                    market_symbol = position.get("market_ticker", "unknown")
-                    positions[market_symbol] = {
-                        "side": position.get("side", "unknown"),  # "YES" or "NO"
-                        "shares": float(position.get("shares", 0)),
-                        "avg_price": float(position.get("avg_price", 0)),
-                        "pnl": float(position.get("pnl", 0)),
-                        "pnl_percent": float(position.get("pnl_percent", 0)),
-                        "risk": float(position.get("risk", 0)),
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
+            for pos in raw_positions:
+                if isinstance(pos, dict):
+                    ticker = pos.get("ticker", pos.get("market_ticker", "unknown"))
+                    side = pos.get("side", "unknown")
+                    shares = float(pos.get("total_traded", pos.get("shares", 0)) or 0)
+                    avg_price = float(pos.get("average_price", pos.get("avg_price", 0)) or 0)
+                    pnl = float(pos.get("realized_pnl", pos.get("pnl", 0)) or 0)
+                else:
+                    ticker = getattr(pos, "ticker", getattr(pos, "market_ticker", "unknown")) or "unknown"
+                    side = getattr(pos, "side", "unknown") or "unknown"
+                    shares = float(getattr(pos, "total_traded", getattr(pos, "shares", 0)) or 0)
+                    avg_price = float(getattr(pos, "average_price", getattr(pos, "avg_price", 0)) or 0)
+                    pnl = float(getattr(pos, "realized_pnl", getattr(pos, "pnl", 0)) or 0)
+
+                positions[ticker] = {
+                    "side": side,
+                    "shares": shares,
+                    "avg_price": avg_price,
+                    "pnl": pnl,
+                    "pnl_percent": 0.0,
+                    "risk": 0.0,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
 
             return {
                 "timestamp": datetime.utcnow().isoformat(),
@@ -167,25 +153,37 @@ class PortfolioDriftMonitor:
                 "total_positions": len(positions)
             }
         except Exception as e:
-            raise RuntimeError(f"Failed to fetch portfolio from Kalshi: {e}")
+            raise RuntimeError(f"Failed to fetch positions from Kalshi: {e}")
 
     def load_portfolio_snapshot(self) -> Dict[str, Any]:
         """
-        Load last saved portfolio snapshot with corruption recovery.
+        Load last saved portfolio snapshot.
 
         Returns:
             Previous portfolio state, or empty dict if no snapshot exists
         """
-        return safe_load_state(self.state_file, default={})
+        if not self.state_file.exists():
+            return {}
+
+        try:
+            with open(self.state_file, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"WARNING: Failed to load snapshot: {e}")
+            return {}
 
     def save_portfolio_snapshot(self, portfolio: Dict[str, Any]) -> None:
         """
-        Save current portfolio as baseline for next check with backup rotation.
+        Save current portfolio as baseline for next check.
 
         Args:
             portfolio: Current portfolio state from get_current_portfolio()
         """
-        safe_save_state(self.state_file, portfolio)
+        try:
+            with open(self.state_file, "w") as f:
+                json.dump(portfolio, f, indent=2)
+        except Exception as e:
+            print(f"ERROR: Failed to save snapshot: {e}")
 
     def should_check_now(self, last_snapshot: Dict[str, Any]) -> bool:
         """

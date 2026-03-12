@@ -2,7 +2,7 @@
 
 Ten autonomous skills that scan, analyze, compare, and trade prediction markets — with a setup wizard that wires them into a proactive, scheduled system delivering intelligence to your phone.
 
-**v0.9-beta** — Full stack operational. [ClawHub](https://clawhub.ai) publishing coming with v1.0.
+**v1.0** — Full stack operational. 5 of 10 skills published on [ClawHub](https://clawhub.ai), remaining 5 queued. First prediction market skill suite on ClawHub.
 
 ## Quick Start
 
@@ -18,17 +18,18 @@ The [setup wizard](prediction-stack-setup/) walks you through API keys, delivery
 
 ## The Stack
 
-| Skill | What It Does |
-|-------|-------------|
-| [**Kalshalyst**](kalshalyst/) | Contrarian edge scanner — finds Kalshi mispricings via LLM analysis, Brier calibration, Kelly sizing |
-| [**Kalshi Command Center**](kalshi-command-center/) | Full Kalshi trading CLI — portfolio, scanning, execution, risk management |
-| [**Polymarket Command Center**](polymarket-command-center/) | Read-only Polymarket interface — trending markets, odds, search, watchlists |
-| [**Prediction Market Arbiter**](prediction-market-arbiter/) | Cross-platform divergence scanner — compares Kalshi vs Polymarket prices |
-| [**Xpulse**](xpulse/) | X/Twitter social signal scanner — DuckDuckGo + local LLM filtering |
-| [**Portfolio Drift Monitor**](portfolio-drift-monitor/) | Position drift alerts — fires when any Kalshi position moves beyond threshold |
-| [**Market Morning Brief**](market-morning-brief/) | Daily intelligence digest — aggregates all skills into a 30-second morning scan |
-| [**Personality Engine**](personality-engine/) | Behavior framework — gives your agent a consistent voice across all interactions |
-| [**Prediction Stack Setup**](prediction-stack-setup/) | Setup wizard — creates schedules, configures delivery, tests the full pipeline |
+| # | Skill | What It Does |
+|---|-------|-------------|
+| 1 | [**Kalshalyst**](kalshalyst/) | Contrarian edge scanner — finds Kalshi mispricings via LLM analysis, Brier calibration, Kelly sizing. Five-phase pipeline: fetch, classify, estimate, edge-score, alert. |
+| 2 | [**Kalshi Command Center**](kalshi-command-center/) | Full Kalshi trading CLI — portfolio P&L, live market scanning with edge scoring, trade execution, risk management. Built-in safety: $25 max trade, 100 contract cap, $50 daily loss cutoff. |
+| 3 | [**Polymarket Command Center**](polymarket-command-center/) | Read-only Polymarket interface — trending markets, detailed odds with probability bars, search, watchlists. Zero API key required. |
+| 4 | [**Prediction Market Arbiter**](prediction-market-arbiter/) | Cross-platform divergence scanner — fuzzy-matches Kalshi vs Polymarket prices across 1000+ markets per run. Detects arbitrage and mispricings automatically. |
+| 5 | [**Xpulse**](xpulse/) | X/Twitter social signal scanner — DuckDuckGo search + two-stage local LLM filtering (tradeable signal detection, then materiality gating). Position-aware, fail-closed. |
+| 6 | [**Portfolio Drift Monitor**](portfolio-drift-monitor/) | Position drift alerts — snapshot comparison fires when any Kalshi position moves beyond threshold since last check. Directional indicators, rate-limited. |
+| 7 | [**Market Morning Brief**](market-morning-brief/) | Daily intelligence digest — aggregates portfolio P&L, top edges, divergences, social signals, crypto prices, Polymarket trends into a 30-second scan. Morning + evening editions. |
+| 8 | [**Personality Engine**](personality-engine/) | Six-system behavior engine — editorial voice, selective silence, variable timing, micro-initiations, context buffer, response tracking. Domain-agnostic with default trading config. |
+| 9 | [**Prediction Stack Orchestrator**](prediction-stack-orchestrator/) | Three-agent pipeline manager (Kalshalyst → Eval → Executor) for automated trading with validation loops, retry logic, and veto power. Routes markets through estimation and validates before execution. |
+| 10 | [**Prediction Stack Setup**](prediction-stack-setup/) | Setup wizard — detects installed skills, walks through API keys, creates cron jobs, enables heartbeat, tests iMessage delivery. Turns 10 standalone skills into a connected system. |
 
 ## How They Connect
 
@@ -50,10 +51,14 @@ The [setup wizard](prediction-stack-setup/) walks you through API keys, delivery
 │  Morning Brief ←── all  │   └───────────────────────────────┘
 │  Personality Engine     │
 └─────────────────────────┘   ┌───────────────────────────────┐
-                              │      EXECUTION LAYER          │
-                              │  Kalshi CC → trade on edges   │
-                              │  Polymarket CC → market data  │
-                              └───────────────────────────────┘
+              │               │      EXECUTION LAYER          │
+              ▼               │  Kalshi CC → trade on edges   │
+┌─────────────────────────┐   │  Polymarket CC → market data  │
+│   ORCHESTRATION LAYER   │   │  Orchestrator → automated     │
+│  Orchestrator validates │   │    pipeline (estimate →       │
+│  estimates + routes to  │   │    validate → execute)        │
+│  execution or retry     │   └───────────────────────────────┘
+└─────────────────────────┘
 ```
 
 Skills communicate via JSON cache files — no direct dependencies. Install any subset and each works standalone. The Morning Brief reads whatever caches exist and gracefully skips the rest.
@@ -76,7 +81,7 @@ Most scans are **silent by design** — they only alert when something exceeds y
 
 **$0/month** if you have a Claude Max subscription. The LLM calls run through the Claude CLI at no additional cost — your subscription covers it.
 
-No Claude subscription? The stack still works. Kalshalyst and Xpulse fall back to **Qwen** (local, free via Ollama) at degraded but functional accuracy — still meaningfully above coin-flip on edge detection. Every other skill in the stack (Command Centers, Arbiter, Drift Monitor, Morning Brief) requires zero LLM calls.
+No Claude subscription? The stack still works. Kalshalyst and Xpulse fall back to **Qwen** (local, free via Ollama) at degraded but functional accuracy — still meaningfully above coin-flip on edge detection. Every other skill in the stack (Command Centers, Arbiter, Drift Monitor, Morning Brief, Orchestrator) requires zero LLM calls.
 
 All external APIs are free: Kalshi API, Polymarket Gamma API, DuckDuckGo search.
 
@@ -92,12 +97,6 @@ All external APIs are free: Kalshi API, Polymarket Gamma API, DuckDuckGo search.
 - [Ollama](https://ollama.ai) with `qwen2.5:7b` (free, local) — or Claude Max subscription for full performance
 - Kalshi API key (free at [kalshi.com](https://kalshi.com))
 - Optional: BlueBubbles for iMessage delivery
-
-## Roadmap to v1.0
-
-- ClawHub publishing (install via `clawhub install` instead of git clone)
-- Premium tier with optimized prompts and Kelly parameters
-- Signal ensemble weighting across Kalshalyst + Xpulse
 
 ## Author
 

@@ -4,24 +4,15 @@ Real-time social signal detection via DuckDuckGo + local Qwen LLM.
 Three-stage pipeline: Signal Detection → Materiality Gate → Position Matching
 """
 
-from __future__ import annotations
-
 import json
 import os
-import re
 import subprocess
 import sys
 import time
 import logging
 import yaml
-import shutil
 from pathlib import Path
 from typing import Optional
-
-try:
-    from json_utils import safe_parse_json
-except ImportError:
-    safe_parse_json = None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -60,114 +51,7 @@ def _load_config() -> dict:
 CONFIG = _load_config()
 XPULSE_CFG = CONFIG.get("xpulse", {})
 KALSHI_CFG = CONFIG.get("kalshi", {})
-OLLAMA_CFG = CONFIG.get("ollama", {"enabled": True, "model": "qwen3:latest", "timeout_seconds": 30})
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# JSON Parsing Helper
-# ──────────────────────────────────────────────────────────────────────────────
-
-def safe_parse_json(text: str, fallback=None, logger_prefix: str = "") -> Optional[dict]:
-    """Parse JSON from text, extracting from curly braces if needed.
-
-    Args:
-        text: Text potentially containing JSON
-        fallback: Default value if parsing fails
-        logger_prefix: Prefix for debug logging
-
-    Returns:
-        Parsed JSON dict or fallback value
-    """
-    if not text:
-        return fallback
-
-    text = text.strip()
-
-    # Try direct parse first
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # Try extracting from curly braces
-    try:
-        start = text.find('{')
-        end = text.rfind('}') + 1
-        if start >= 0 and end > start:
-            return json.loads(text[start:end])
-    except json.JSONDecodeError:
-        pass
-
-    _log(f"{logger_prefix} Failed to parse JSON from: {text[:100]}")
-    return fallback
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# State File Recovery Helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _safe_load_state(filepath: Path, default=None):
-    """Load JSON state file with corruption recovery.
-
-    Tries to load primary file first, falls back to .bak if primary is corrupted.
-
-    Args:
-        filepath: Path to JSON state file
-        default: Default value if both files fail or don't exist
-
-    Returns:
-        Loaded data, or default if unable to load
-    """
-    bak = filepath.with_suffix('.json.bak')
-
-    # Try primary file first
-    if filepath.exists():
-        try:
-            with open(filepath) as f:
-                data = json.load(f)
-            return data
-        except (json.JSONDecodeError, IOError) as e:
-            _log(f"Primary state file corrupted ({filepath}): {e}")
-
-    # Try backup file
-    if bak.exists():
-        try:
-            with open(bak) as f:
-                data = json.load(f)
-            _log(f"Recovered from backup: {bak}")
-            return data
-        except (json.JSONDecodeError, IOError) as e:
-            _log(f"Backup state file also corrupted ({bak}): {e}")
-
-    # Return default
-    return default if default is not None else {}
-
-
-def _safe_save_state(filepath: Path, data) -> None:
-    """Save JSON state with backup rotation.
-
-    Before writing new state, copies current file to .bak for recovery.
-
-    Args:
-        filepath: Path to JSON state file
-        data: Data to save
-    """
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    bak = filepath.with_suffix('.json.bak')
-
-    # Rotate backup: current → backup
-    if filepath.exists():
-        try:
-            shutil.copy2(filepath, bak)
-        except IOError as e:
-            _log(f"Failed to create backup {bak}: {e}")
-
-    # Write new primary file
-    try:
-        with open(filepath, 'w') as f:
-            json.dump(data, f, indent=2)
-    except IOError as e:
-        _log(f"Failed to save state to {filepath}: {e}")
+OLLAMA_CFG = CONFIG.get("ollama", {"enabled": True, "model": "qwen3:latest", "timeout_seconds": 15})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -200,12 +84,36 @@ def _search_x_posts(topic: str) -> list:
     return []
 
 
-def _call_ollama(prompt: str, timeout: int = 30) -> Optional[dict]:
+def _check_ollama_model() -> bool:
+    """Check if configured Ollama model is available. Warn if not."""
+    model = OLLAMA_CFG.get("model", "qwen3:latest")
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = [m.get("name", "") for m in data.get("models", [])]
+            if not any(model in m or m.startswith(model.split(":")[0]) for m in models):
+                logging.warning(
+                    f"Ollama model '{model}' not found. Available: {', '.join(models[:5])}. "
+                    f"Try: ollama pull {model} — or set ollama.model to qwen2.5:7b in config."
+                )
+                return False
+            return True
+    except Exception as e:
+        logging.warning(f"Ollama not reachable at localhost:11434: {e}")
+        return False
+
+
+# Run model check on import (non-blocking warning)
+_check_ollama_model()
+
+
+def _call_ollama(prompt: str, timeout: int = 15) -> Optional[dict]:
     """Call Ollama via HTTP API (localhost:11434) for JSON responses.
 
     Uses the /api/generate endpoint which supports format: "json".
     Falls back to CLI if HTTP fails.
-    Uses robust JSON parsing to handle markdown-wrapped, escaped, or partially-malformed output.
     """
     model = OLLAMA_CFG.get("model", "qwen3:latest")
 
@@ -231,22 +139,7 @@ def _call_ollama(prompt: str, timeout: int = 30) -> Optional[dict]:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             response_text = data.get("response", "").strip()
-
-            # Strip thinking blocks that Qwen may add
-            response_text = re.sub(
-                r"<think>.*?</think>", "", response_text, flags=re.DOTALL
-            ).strip()
-
-            # Use robust parsing for Qwen output
-            result = safe_parse_json(
-                response_text,
-                fallback=None,
-                logger_prefix="[Ollama HTTP]"
-            )
-            if result is not None:
-                return result
-            _log(f"Ollama HTTP: robust parsing failed for response: {response_text[:100]}")
-            return None
+            return json.loads(response_text)
 
     except Exception as e:
         _log(f"Ollama HTTP API failed: {e}")
@@ -259,23 +152,13 @@ def _call_ollama(prompt: str, timeout: int = 30) -> Optional[dict]:
             capture_output=True, timeout=timeout, text=True
         )
         if result.returncode == 0 and result.stdout.strip():
-            # Use robust parsing for Qwen CLI output
+            # Try to extract JSON from response
             text = result.stdout.strip()
-
-            # Strip thinking blocks that Qwen may add
-            text = re.sub(
-                r"<think>.*?</think>", "", text, flags=re.DOTALL
-            ).strip()
-
-            parsed = safe_parse_json(
-                text,
-                fallback=None,
-                logger_prefix="[Ollama CLI]"
-            )
-            if parsed is not None:
-                return parsed
-            _log(f"Ollama CLI: robust parsing failed for output: {text[:100]}")
-            return None
+            # Find first { and last } to extract JSON
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                return json.loads(text[start:end])
         _log(f"Ollama CLI fallback failed: returncode={result.returncode}")
     except Exception as e:
         _log(f"Ollama CLI fallback error: {e}")
@@ -320,21 +203,27 @@ def _analyze_signals_local(topic: str, posts: list) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _load_signal_history() -> list:
-    """Load history of previously sent X signal alerts with recovery."""
+    """Load history of previously sent X signal alerts."""
     history_path = STATE_DIR / "x_signal_history.json"
-    data = _safe_load_state(history_path, default=[])
-    if not isinstance(data, list):
-        data = []
-    # Only keep last 48h of history
-    cutoff = time.time() - 48 * 3600
-    return [h for h in data if h.get("timestamp", 0) > cutoff]
+    try:
+        with open(history_path) as f:
+            data = json.load(f)
+            # Only keep last 48h of history
+            cutoff = time.time() - 48 * 3600
+            return [h for h in data if h.get("timestamp", 0) > cutoff]
+    except (OSError, json.JSONDecodeError):
+        return []
 
 
 def _save_signal_history(history: list):
-    """Persist sent signal history with backup rotation."""
+    """Persist sent signal history."""
     history_path = STATE_DIR / "x_signal_history.json"
-    # Keep max 200 entries
-    _safe_save_state(history_path, history[-200:])
+    try:
+        # Keep max 200 entries
+        with open(history_path, "w") as f:
+            json.dump(history[-200:], f, indent=2)
+    except OSError:
+        pass
 
 
 def _filter_novel_signals(signals: list, history: list) -> list:
@@ -431,27 +320,26 @@ def _get_active_kalshi_topics() -> list:
         # SDK 3.x signature varies — call with no kwargs, filter locally
         try:
             resp = client.get_positions(limit=100, settlement_status="unsettled")
-        except TypeError as sdk_err:
+        except (TypeError, Exception) as sdk_err:
             _log(f"get_positions with kwargs failed ({sdk_err}), retrying without")
             resp = client.get_positions()
-        except Exception as api_err:
-            err_str = str(api_err).lower()
-            if "401" in err_str or "403" in err_str or "unauthorized" in err_str or "forbidden" in err_str:
-                _log(f"FATAL: Kalshi auth failed fetching positions: {api_err}. Check api_key_id in ~/.openclaw/config.yaml")
-                return []  # Signal auth failure clearly in logs
-            _log(f"get_positions with kwargs failed ({api_err}), retrying without")
-            resp = client.get_positions()
 
-        # SDK returns GetPositionsResponse — v3 uses .positions, v2 uses .market_positions
-        if hasattr(resp, "positions") and resp.positions is not None:
-            positions = resp.positions
-        elif hasattr(resp, "market_positions") and resp.market_positions is not None:
-            positions = resp.market_positions
-        elif isinstance(resp, dict):
-            positions = resp.get("market_positions", resp.get("positions", []))
+        # SDK returns GetPositionsResponse — extract market_positions
+        # Use getattr with default to handle SDK versions where hasattr returns False
+        # even though the attribute exists (descriptor/property edge case)
+        if isinstance(resp, dict):
+            positions = resp.get("market_positions", [])
         else:
-            _log(f"Unexpected Kalshi response type: {type(resp)}")
-            positions = []
+            positions = getattr(resp, "market_positions", None)
+            if positions is None:
+                # Last resort: try iterating common wrapper keys via __dict__ or to_dict()
+                try:
+                    d = resp.to_dict() if hasattr(resp, "to_dict") else vars(resp)
+                    positions = d.get("market_positions", [])
+                except Exception:
+                    positions = []
+                _log(f"market_positions via fallback dict extraction, type was: {type(resp)}")
+            positions = positions or []
 
         # Filter to unsettled positions locally if API didn't filter
         filtered = []
@@ -507,8 +395,8 @@ def _signal_matches_position(signal: dict, positions: list) -> Optional[dict]:
     """Check if signal matches any active Kalshi position (2+ keywords required)."""
     signal_topic = signal.get("topic", "").lower()
     signal_summary = signal.get("summary", "").lower()
-    signal_words = set(w for w in signal_topic.replace("-", " ").replace("_", " ").split() if len(w) > 2)
-    signal_words |= set(w for w in signal_summary.replace("-", " ").replace("_", " ").split() if len(w) > 2)
+    signal_words = set(signal_topic.replace("-", " ").replace("_", " ").split())
+    signal_words |= set(w for w in signal_summary.split() if len(w) > 3)
 
     best_match = None
     best_overlap = 0
@@ -546,32 +434,50 @@ def check_x_signals(state: dict, dry_run: bool = False, force: bool = False) -> 
 
     _log(f"X signal scanner starting... ({len(topics)} topics)")
 
-    # ── Stage 1: Signal Detection ──────────────────────────────────────────────
-    signals = []
-    for topic in topics:
+    # ── Stage 1: Signal Detection (parallelized) ──────────────────────────────
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _scan_topic(topic):
+        """Scan a single topic — called in parallel."""
         posts = _search_x_posts(topic)
         if not posts:
-            continue
-
+            return None
         _log(f"  {topic}: {len(posts)} posts found")
         analysis = _analyze_signals_local(topic, posts)
-
         if analysis.get("has_signal") and analysis.get("confidence", 0) >= min_confidence:
-            signals.append({
+            return {
                 "topic": topic,
                 "confidence": analysis["confidence"],
                 "direction": analysis.get("direction", "?"),
                 "summary": analysis.get("summary", ""),
                 "post_count": len(posts),
-            })
+            }
+        return None
 
-    # Cache all Stage 1 signals for morning brief with backup rotation
+    signals = []
+    with ThreadPoolExecutor(max_workers=min(len(topics), 4)) as executor:
+        futures = {executor.submit(_scan_topic, t): t for t in topics}
+        for future in as_completed(futures, timeout=60):
+            try:
+                result = future.result(timeout=20)
+                if result:
+                    signals.append(result)
+            except Exception as e:
+                _log(f"  Topic scan error: {e}")
+
+    # Cache all Stage 1 signals for morning brief
     cache_path = STATE_DIR / "x_signal_cache.json"
-    _safe_save_state(cache_path, {
-        "signals": signals,
-        "topics_scanned": len(topics),
-        "timestamp": time.time(),
-    })
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        with open(cache_path, "w") as f:
+            json.dump({
+                "signals": signals,
+                "topics_scanned": len(topics),
+                "cached_at": _dt.now(_tz.utc).isoformat(),
+                "timestamp": time.time(),
+            }, f, indent=2)
+    except OSError:
+        pass
 
     _log(f"X scanner: {len(signals)} high-confidence signals from {len(topics)} topics")
 
