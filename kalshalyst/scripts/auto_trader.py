@@ -549,15 +549,18 @@ def run_auto_trader(dry_run: bool = False) -> dict:
 
         # Default pipeline config
         pipeline_cfg = {
-            "min_volume": 50,
-            "min_days_to_close": 7,
+            "min_volume": 10,
+            "min_days_to_close": 1,
             "max_days_to_close": 365,
-            "max_pages": 3,
-            "max_fetch_seconds": 30,
-            "max_markets_to_analyze": 30,
+            "max_pages": 5,
+            "max_fetch_seconds": 45,
+            "max_markets_to_analyze": 50,
             "no_confidence_lo": 0.48,
             "no_confidence_hi": 0.55,
             "min_edge_pct": 3.0,
+            "min_confidence": 0.2,
+            "max_spread_cents": 10,
+            "exclude_fair_direction": True,
             "ensemble_enabled": False,
         }
 

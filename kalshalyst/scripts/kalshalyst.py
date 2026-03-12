@@ -17,6 +17,7 @@ Usage:
 """
 
 import json
+import re
 import time
 import logging
 from datetime import datetime, timezone
@@ -50,12 +51,28 @@ _BLOCKED_CATEGORIES_API = {
     "social-media", "streaming", "celebrities",
 }
 
-_SPORTS_TOKENS = {
+# Single words use word-boundary regex; multi-word phrases use substring match.
+# This prevents "finals" from matching "Final GDP report" while still catching
+# "NBA Finals" or "Stanley Cup Finals".
+_SPORTS_WORDS = {
     "nfl", "nba", "mlb", "nhl", "mls", "ncaa", "pga", "ufc", "wwe",
+    "playoff", "playoffs", "heisman",
+    "valorant", "atp", "wta", "itf",
+}
+
+_SPORTS_PHRASES = {
     "super bowl", "superbowl", "march madness", "world series",
-    "stanley cup", "finals", "playoff", "mvp", "heisman",
-    "premier league", "la liga", "serie a", "bundesliga", "ligue 1",
-    "champions league", "europa league", "copa", "valorant", "league of legends",
+    "stanley cup", "nba finals", "nhl finals", "mlb finals",
+    "premier league", "la liga", "serie a",
+    "bundesliga", "ligue 1", "champions league", "europa league",
+    "league of legends", "copa america", "copa del rey",
+    "challenger tour", "challenger round",
+}
+
+# Ticker prefixes that are always sports — hard block
+_SPORTS_TICKER_PREFIXES = {
+    "KXATP", "KXNFL", "KXNBA", "KXMLB", "KXNHL", "KXMLS",
+    "KXNCAA", "KXPGA", "KXUFC", "KXWWE", "KXSOCCER", "KXTENNIS",
 }
 
 _MICRO_TIMEFRAME_PATTERNS = {
@@ -80,8 +97,30 @@ def _is_blocked(ticker: str, category: str = "", title: str = "") -> bool:
 
 
 def _is_sports(ticker: str, title: str) -> bool:
+    """Detect sports markets using word-boundary matching.
+
+    Three-layer check:
+      1. Ticker prefix (KXATP*, KXNFL*, etc.) — always sports
+      2. Single-word tokens with word boundaries — "finals" won't match "Final GDP"
+      3. Multi-word phrases with substring match — "stanley cup" is unambiguous
+    """
+    ticker_upper = ticker.upper()
+    if any(ticker_upper.startswith(p) for p in _SPORTS_TICKER_PREFIXES):
+        return True
+
     combined = f"{ticker} {title}".lower()
-    return any(tok in combined for tok in _SPORTS_TOKENS)
+
+    # Word-boundary match for single tokens
+    for word in _SPORTS_WORDS:
+        if re.search(rf'\b{re.escape(word)}\b', combined):
+            return True
+
+    # Substring match for multi-word phrases (unambiguous)
+    for phrase in _SPORTS_PHRASES:
+        if phrase in combined:
+            return True
+
+    return False
 
 
 # ── Phase 1: Market Fetching ──────────────────────────────────────────────
@@ -278,6 +317,61 @@ def calculate_edges(markets: list[dict], cfg: dict) -> list[dict]:
     logger.info(f"Edge: {len(edges)} with >= {min_edge}% effective edge")
 
     return edges
+
+
+# ── Phase 4.5: Post-estimation Market Filter ────────────────────────────────
+
+def _apply_market_filter(edges: list[dict], cfg: dict) -> list[dict]:
+    """Post-estimation filter: remove low-quality edges before execution.
+
+    Applied AFTER Claude estimation, so we can filter on estimated values
+    like confidence, edge size, and direction — not just raw market data.
+
+    Filters:
+      - min_effective_edge_pct: minimum edge after confidence adjustment (default 3.0)
+      - min_confidence: minimum estimator confidence (default 0.2)
+      - exclude_fair: drop edges with direction == "fair" (default True)
+      - max_spread_cents: skip if bid/ask spread too wide (default 10)
+    """
+    min_edge = cfg.get("min_edge_pct", 3.0)
+    min_conf = cfg.get("min_confidence", 0.2)
+    exclude_fair = cfg.get("exclude_fair_direction", True)
+    max_spread = cfg.get("max_spread_cents", 10)
+
+    before = len(edges)
+    filtered = []
+    stats = {"low_edge": 0, "low_conf": 0, "fair": 0, "wide_spread": 0}
+
+    for e in edges:
+        eff_edge = e.get("effective_edge_pct", 0)
+        conf = e.get("confidence", 0)
+        direction = e.get("direction", "fair")
+        spread = e.get("spread", 0)
+
+        if eff_edge < min_edge:
+            stats["low_edge"] += 1
+            continue
+        if conf < min_conf:
+            stats["low_conf"] += 1
+            continue
+        if exclude_fair and direction == "fair":
+            stats["fair"] += 1
+            continue
+        if max_spread and spread > max_spread:
+            stats["wide_spread"] += 1
+            continue
+
+        filtered.append(e)
+
+    # Sort by effective edge descending
+    filtered.sort(key=lambda x: x.get("effective_edge_pct", 0), reverse=True)
+
+    logger.info(
+        f"MarketFilter: {before} → {len(filtered)} edges "
+        f"(low_edge={stats['low_edge']}, low_conf={stats['low_conf']}, "
+        f"fair={stats['fair']}, wide_spread={stats['wide_spread']})"
+    )
+    return filtered
 
 
 def format_insight(edge: dict) -> dict:
