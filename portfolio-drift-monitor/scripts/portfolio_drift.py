@@ -105,8 +105,16 @@ class PortfolioDriftMonitor:
                 response = self.client.get_positions()
 
             # Extract positions list — handle SDK v3 (.positions) and v2 (.market_positions)
+            _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
             raw_positions = []
             if isinstance(response, dict):
+                # Schema validation — fail loud if Kalshi changed field names again
+                if response and not any(k in response for k in _KNOWN_POS_KEYS):
+                    raise RuntimeError(
+                        f"SCHEMA DRIFT: Kalshi API response has none of the expected position keys. "
+                        f"Got: {sorted(response.keys())}. Expected one of: {_KNOWN_POS_KEYS}. "
+                        f"Kalshi changed their API — fix field names in portfolio_drift.py."
+                    )
                 raw_positions = response.get("event_positions") or response.get("positions") or response.get("market_positions", [])
             else:
                 # SDK object — try .event_positions (v3 API), .positions (SDK), .market_positions (v2)
@@ -129,13 +137,22 @@ class PortfolioDriftMonitor:
                 if isinstance(pos, dict):
                     ticker = pos.get("ticker", pos.get("market_ticker", "unknown"))
                     side = pos.get("side", "unknown")
-                    shares = float(pos.get("total_traded", pos.get("shares", 0)) or 0)
+                    # v3 API: position_fp (float), v2: position (int), fallback: total_traded/shares
+                    _pos_val = pos.get("position_fp") or pos.get("position") or pos.get("total_traded") or pos.get("shares", 0)
+                    try:
+                        shares = float(_pos_val or 0)
+                    except (ValueError, TypeError):
+                        shares = 0.0
                     avg_price = float(pos.get("average_price", pos.get("avg_price", 0)) or 0)
                     pnl = float(pos.get("realized_pnl", pos.get("pnl", 0)) or 0)
                 else:
                     ticker = getattr(pos, "ticker", getattr(pos, "market_ticker", "unknown")) or "unknown"
                     side = getattr(pos, "side", "unknown") or "unknown"
-                    shares = float(getattr(pos, "total_traded", getattr(pos, "shares", 0)) or 0)
+                    _pos_val = getattr(pos, "position_fp", None) or getattr(pos, "position", None) or getattr(pos, "total_traded", None) or getattr(pos, "shares", 0)
+                    try:
+                        shares = float(_pos_val or 0)
+                    except (ValueError, TypeError):
+                        shares = 0.0
                     avg_price = float(getattr(pos, "average_price", getattr(pos, "avg_price", 0)) or 0)
                     pnl = float(getattr(pos, "realized_pnl", getattr(pos, "pnl", 0)) or 0)
 
@@ -316,8 +333,45 @@ class PortfolioDriftMonitor:
 
         return f"{direction_emoji} {side}/{symbol} → +{drift_pct:.1f}% ({change_detail})\n   {time_str}"
 
+    def _preflight_schema_check(self) -> None:
+        """Verify Kalshi API response schema before running drift check.
+
+        Fetches 1 position and asserts expected keys exist. Raises RuntimeError
+        with actionable error message if schema has drifted. This catches field
+        name changes BEFORE they cause silent empty-portfolio results.
+        """
+        try:
+            try:
+                response = self.client.get_positions(limit=1)
+            except (TypeError, Exception):
+                response = self.client.get_positions()
+
+            if isinstance(response, dict):
+                data = response
+            elif hasattr(response, "to_dict"):
+                data = response.to_dict()
+            else:
+                data = vars(response) if hasattr(response, "__dict__") else {}
+
+            _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
+            if data and not any(k in data for k in _KNOWN_POS_KEYS):
+                raise RuntimeError(
+                    f"SCHEMA DRIFT DETECTED: Kalshi API response contains none of the expected "
+                    f"position keys {_KNOWN_POS_KEYS}. Got: {sorted(data.keys())}. "
+                    f"Kalshi changed their API — update field names in portfolio_drift.py before "
+                    f"the drift monitor silently reports empty portfolios."
+                )
+        except RuntimeError:
+            raise  # re-raise schema drift errors
+        except Exception as e:
+            # Non-schema errors (auth, network) are handled downstream — don't block startup
+            print(f"WARNING: Preflight schema check skipped: {e}")
+
     def run(self) -> None:
         """Execute portfolio drift check and output alerts."""
+        # Preflight: verify API schema hasn't changed
+        self._preflight_schema_check()
+
         # Load previous snapshot
         previous_snapshot = self.load_portfolio_snapshot()
 

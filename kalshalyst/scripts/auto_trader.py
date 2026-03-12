@@ -99,6 +99,14 @@ def get_current_positions(client) -> dict:
         if hasattr(resp, 'status') and resp.status in (401, 403):
             raise RuntimeError(f"Kalshi auth failed (HTTP {resp.status}). Check api_key_id in config.yaml.")
         data = json.loads(raw)
+        # Schema validation — fail loud on unknown response shape
+        _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
+        if not any(k in data for k in _KNOWN_POS_KEYS):
+            raise RuntimeError(
+                f"SCHEMA DRIFT: Kalshi API response has none of expected position keys. "
+                f"Got: {sorted(data.keys())}. Expected one of: {_KNOWN_POS_KEYS}. "
+                f"Kalshi changed their API — fix field names in auto_trader.py."
+            )
         # v3 API returns event_positions, SDK uses positions, v2 returns market_positions
         positions_list = data.get("event_positions") or data.get("positions") or data.get("market_positions", [])
         if not isinstance(positions_list, list):

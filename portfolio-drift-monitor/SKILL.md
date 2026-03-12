@@ -189,6 +189,18 @@ echo $KALSHI_KEY_ID
 ls -la $KALSHI_KEY_PATH
 ```
 
+## Agent Bug-Fix Protocol
+
+**CRITICAL**: When you (the agent) discover and fix a bug in any script during a conversation, you MUST write the fix to the source file on disk using file editing tools. Showing the fix in chat is NOT sufficient — the next scheduled run starts a fresh session and will not have your conversational fix.
+
+Checklist after finding a bug:
+1. Edit the actual `.py` file on disk (e.g., `~/skills/portfolio-drift-monitor/scripts/portfolio_drift.py`)
+2. Also update the installed copy at `~/.openclaw/skills/portfolio-drift-monitor/scripts/portfolio_drift.py`
+3. Confirm both files are written before telling the user the fix is done
+4. If the fix is significant, stage a git commit in `~/skills/`
+
+Never say "fixed" if you only demonstrated the fix in conversation output.
+
 ## Known Limitations
 
 - **Kalshi-only:** Currently monitors Kalshi positions only. Polymarket positions require separate tracking.

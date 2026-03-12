@@ -589,6 +589,17 @@ def get_portfolio_snapshot(client) -> dict:
             data = json.loads(resp.read())
             position_value = 0.0
 
+            # Schema validation — fail loud on unknown response shape
+            _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
+            if not any(k in data for k in _KNOWN_POS_KEYS):
+                snapshot["error"] = (
+                    f"SCHEMA DRIFT: Kalshi API response has none of expected position keys. "
+                    f"Got: {sorted(data.keys())}. Expected one of: {_KNOWN_POS_KEYS}. "
+                    f"Kalshi changed their API — fix field names in pnl_tracker.py."
+                )
+                logger.error(snapshot["error"])
+                return snapshot
+
             all_positions = data.get("event_positions") or data.get("positions") or data.get("market_positions", [])
             for p in all_positions:
                 ticker = p.get("ticker", "")

@@ -256,6 +256,17 @@ def portfolio_command(args: str = "") -> str:
         # Get open positions via raw API (avoids SDK deserialization bug)
         resp = client._portfolio_api.get_positions_without_preload_content(limit=100)
         raw_data = json.loads(resp.read())
+
+        # Schema validation — fail loud if Kalshi changed field names again
+        _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
+        if not any(k in raw_data for k in _KNOWN_POS_KEYS):
+            return (
+                f"❌ SCHEMA DRIFT: Kalshi API response has none of the expected position keys.\n"
+                f"Got keys: {sorted(raw_data.keys())}\n"
+                f"Expected one of: {_KNOWN_POS_KEYS}\n"
+                f"This means Kalshi changed their API again. Fix the field name in kalshi_commands.py."
+            )
+
         # v3 API returns event_positions, v2 returns market_positions, SDK uses positions
         all_positions = raw_data.get("event_positions") or raw_data.get("positions") or raw_data.get("market_positions", [])
         # v3 uses position_fp (float), v2 uses position (int) for quantity
