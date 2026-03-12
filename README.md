@@ -1,6 +1,6 @@
 # OpenClaw Prediction Market Trading Stack
 
-Nine autonomous skills that scan, analyze, compare, and trade prediction markets — with a setup wizard that wires them into a proactive, scheduled system delivering intelligence to your phone.
+Ten autonomous skills that scan, analyze, compare, and trade prediction markets — with a setup wizard that wires them into a proactive, scheduled system delivering intelligence to your phone.
 
 **v0.9-beta** — Full stack operational. [ClawHub](https://clawhub.ai) publishing coming with v1.0.
 
