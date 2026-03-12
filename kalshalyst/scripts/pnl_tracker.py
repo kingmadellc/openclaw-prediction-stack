@@ -589,9 +589,14 @@ def get_portfolio_snapshot(client) -> dict:
             data = json.loads(resp.read())
             position_value = 0.0
 
-            for p in data.get("market_positions", []):
+            all_positions = data.get("event_positions") or data.get("positions") or data.get("market_positions", [])
+            for p in all_positions:
                 ticker = p.get("ticker", "")
-                qty = int(p.get("position", 0))
+                v = p.get("position_fp") or p.get("position", 0)
+                try:
+                    qty = int(float(v))
+                except (ValueError, TypeError):
+                    qty = 0
 
                 if qty == 0:
                     continue  # Skip empty positions

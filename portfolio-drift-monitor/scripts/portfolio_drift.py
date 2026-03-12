@@ -107,16 +107,18 @@ class PortfolioDriftMonitor:
             # Extract positions list — handle SDK v3 (.positions) and v2 (.market_positions)
             raw_positions = []
             if isinstance(response, dict):
-                raw_positions = response.get("positions", response.get("market_positions", []))
+                raw_positions = response.get("event_positions") or response.get("positions") or response.get("market_positions", [])
             else:
-                # SDK object — try .positions first (v3), then .market_positions (v2)
-                raw_positions = getattr(response, "positions", None)
+                # SDK object — try .event_positions (v3 API), .positions (SDK), .market_positions (v2)
+                raw_positions = getattr(response, "event_positions", None)
+                if raw_positions is None:
+                    raw_positions = getattr(response, "positions", None)
                 if raw_positions is None:
                     raw_positions = getattr(response, "market_positions", None)
                 if raw_positions is None:
                     try:
                         d = response.to_dict() if hasattr(response, "to_dict") else vars(response)
-                        raw_positions = d.get("positions", d.get("market_positions", []))
+                        raw_positions = d.get("event_positions") or d.get("positions") or d.get("market_positions", [])
                     except Exception:
                         raw_positions = []
                 raw_positions = raw_positions or []

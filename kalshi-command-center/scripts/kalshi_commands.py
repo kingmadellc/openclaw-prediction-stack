@@ -255,8 +255,17 @@ def portfolio_command(args: str = "") -> str:
 
         # Get open positions via raw API (avoids SDK deserialization bug)
         resp = client._portfolio_api.get_positions_without_preload_content(limit=100)
-        positions = [p for p in json.loads(resp.read()).get("market_positions", [])
-                     if int(p.get("position", 0)) != 0]
+        raw_data = json.loads(resp.read())
+        # v3 API returns event_positions, v2 returns market_positions, SDK uses positions
+        all_positions = raw_data.get("event_positions") or raw_data.get("positions") or raw_data.get("market_positions", [])
+        # v3 uses position_fp (float), v2 uses position (int) for quantity
+        def _get_qty(p):
+            v = p.get("position_fp") or p.get("position", 0)
+            try:
+                return int(float(v))
+            except (ValueError, TypeError):
+                return 0
+        positions = [p for p in all_positions if _get_qty(p) != 0]
 
         total_cost = 0.0
         total_val = 0.0
@@ -264,7 +273,7 @@ def portfolio_command(args: str = "") -> str:
 
         for p in positions:
             ticker = p.get("ticker", "?")
-            qty = int(p.get("position", 0))
+            qty = _get_qty(p)
             side = "YES" if qty >= 0 else "NO"
             abs_qty = abs(qty)
             cost = float(p.get("market_exposure_dollars", 0))
@@ -810,10 +819,10 @@ def _place_order(
 
             positions_url = f"{BASE_URL}/portfolio/positions"
             pos_resp = json.loads(client.call_api("GET", positions_url).read())
-            positions = pos_resp.get("market_positions", pos_resp.get("positions", []))
+            pos_list = pos_resp.get("event_positions") or pos_resp.get("positions") or pos_resp.get("market_positions", [])
             found_position = any(
                 p.get("ticker") == ticker or p.get("market_ticker") == ticker
-                for p in positions
+                for p in pos_list
             )
 
             if found_resting:
@@ -1016,10 +1025,10 @@ def execute_pick_command(pick_number: int, qty_override: int = 0) -> str:
         # Check executed (filled) orders — look at positions
         positions_url = f"{BASE_URL}/portfolio/positions"
         pos_resp = json.loads(client.call_api("GET", positions_url).read())
-        positions = pos_resp.get("market_positions", pos_resp.get("positions", []))
+        pos_list = pos_resp.get("event_positions") or pos_resp.get("positions") or pos_resp.get("market_positions", [])
         found_position = any(
             p.get("ticker") == ticker or p.get("market_ticker") == ticker
-            for p in positions
+            for p in pos_list
         )
 
         if found_resting:

@@ -99,14 +99,15 @@ def get_current_positions(client) -> dict:
         if hasattr(resp, 'status') and resp.status in (401, 403):
             raise RuntimeError(f"Kalshi auth failed (HTTP {resp.status}). Check api_key_id in config.yaml.")
         data = json.loads(raw)
-        # SDK v3 returns "positions", v2 returns "market_positions"
-        positions_list = data.get("positions") or data.get("market_positions", [])
+        # v3 API returns event_positions, SDK uses positions, v2 returns market_positions
+        positions_list = data.get("event_positions") or data.get("positions") or data.get("market_positions", [])
         if not isinstance(positions_list, list):
             raise RuntimeError(f"Unexpected positions response schema: got {type(positions_list).__name__}")
         for p in positions_list:
             ticker = p.get("ticker", "")
             try:
-                qty = int(p.get("position", 0))
+                v = p.get("position_fp") or p.get("position", 0)
+                qty = int(float(v))
             except (ValueError, TypeError) as e:
                 logger.warning(f"Skipping malformed position entry for {ticker}: {e}")
                 continue
