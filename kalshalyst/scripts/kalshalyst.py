@@ -218,6 +218,32 @@ def _load_market_filter() -> dict:
 _MARKET_FILTER = _load_market_filter()
 
 
+# ── Xpulse Prompt Loader ───────────────────────────────────────────────────
+# Two-tier: premium loads from ~/prompt-lab/xpulse-prompt.md (system prompt).
+# Free tier uses the hardcoded inline prompt below.
+
+def _load_xpulse_prompt() -> Optional[str]:
+    """Load premium Xpulse system prompt if available.
+
+    Checks ~/prompt-lab/xpulse-prompt.md. Returns stripped prompt text
+    (after frontmatter) or None if not found / invalid.
+    """
+    prompt_path = Path.home() / "prompt-lab" / "xpulse-prompt.md"
+    try:
+        if prompt_path.exists():
+            text = prompt_path.read_text()
+            parts = text.split("---", 1)
+            prompt = parts[1].strip() if len(parts) > 1 else text.strip()
+            if len(prompt) > 50:
+                logger.info(f"Loaded premium Xpulse prompt from {prompt_path}")
+                return prompt
+    except Exception as e:
+        logger.debug(f"Could not load Xpulse prompt from {prompt_path}: {e}")
+    return None
+
+_XPULSE_SYSTEM_PROMPT = _load_xpulse_prompt()
+
+
 def _apply_market_filter(edges: list[dict], cfg: dict) -> list[dict]:
     """Apply eval-driven SKIP and BOOST rules to post-estimation edges.
 
@@ -444,15 +470,19 @@ def _is_sports(ticker: str, title: str) -> bool:
 
 # ── Phase 1: Market Fetching ──────────────────────────────────────────────
 
-def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
+def fetch_kalshi_markets(client, cfg: dict, return_sports: bool = False):
     """Fetch and pre-filter Kalshi markets.
 
     Args:
         client: Initialized Kalshi client
         cfg: Configuration dict with fetch parameters
+        return_sports: If True, return (macro_markets, sports_markets) tuple.
+            Sports markets still pass all other filters (volume, book, timeframe).
+            Default False for backward compatibility.
 
     Returns:
-        List of pre-filtered market dicts
+        List of pre-filtered market dicts (default), or
+        (macro_markets, sports_markets) tuple if return_sports=True
     """
     min_volume = cfg.get("min_volume", 50)
     min_days = cfg.get("min_days_to_close", 7)
@@ -499,6 +529,7 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
 
     # Pre-filter
     filtered = []
+    sports_filtered = []  # Collected when return_sports=True
     stats = {"no_book": 0, "blocked": 0, "sports": 0, "volume": 0, "timeframe": 0}
 
     for m in all_markets:
@@ -533,13 +564,34 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
             stats["blocked"] += 1
             continue
 
-        if volume < min_volume:
-            stats["volume"] += 1
-            continue
-
+        # Sports detection BEFORE volume filter — sports only need a book
+        # (volume >= 1). ELO model generates edge from team data, not market
+        # depth. Low-volume sports markets = biggest edge opportunity.
         is_sports = _is_sports(ticker, title)
         if is_sports:
             stats["sports"] += 1
+            if return_sports and volume >= 1:
+                # Collect sports markets for sports_estimator routing
+                # Sports use 0-day minimum (games happen today) vs 7-day for macro
+                days_to_close = _calc_days_to_close(m)
+                if days_to_close is not None and 0 <= days_to_close <= max_days:
+                    sports_filtered.append({
+                        "ticker": ticker,
+                        "title": title[:80],
+                        "yes_bid": yes_bid,
+                        "yes_ask": yes_ask,
+                        "yes_price": price,
+                        "spread": spread,
+                        "volume": volume,
+                        "open_interest": m.get("open_interest", 0) or 0,
+                        "days_to_close": days_to_close,
+                        "expiration_time": m.get("expiration_time", ""),
+                        "is_sports": True,
+                    })
+            continue
+
+        if volume < min_volume:
+            stats["volume"] += 1
             continue
 
         days_to_close = _calc_days_to_close(m)
@@ -561,10 +613,14 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
             "is_sports": is_sports,
         })
 
+    sports_msg = f", sports_collected={len(sports_filtered)}" if return_sports else ""
     logger.info(
         f"Fetch: {len(filtered)} passed filters (blocked={stats['blocked']}, "
-        f"sports_tagged={stats['sports']}, volume={stats['volume']}, timeframe={stats['timeframe']})"
+        f"sports_tagged={stats['sports']}, volume={stats['volume']}, timeframe={stats['timeframe']}{sports_msg})"
     )
+
+    if return_sports:
+        return filtered, sports_filtered
     return filtered
 
 
@@ -626,7 +682,8 @@ def _call_xpulse_estimate(market: dict) -> Optional[dict]:
     price = market.get("yes_price", 50)
     days = market.get("days_to_close")
 
-    xpulse_prompt = (
+    # Two-tier prompt: premium system prompt + market user message, or free inline prompt.
+    _free_prompt = (
         f"You are a prediction market probability estimator focused on sentiment "
         f"and social signals. Given this market, estimate the true probability of YES.\n\n"
         f"MARKET: {title}\n"
@@ -635,11 +692,25 @@ def _call_xpulse_estimate(market: dict) -> Optional[dict]:
         f'Respond ONLY with JSON: {{"estimated_probability": <0.0-1.0>, '
         f'"confidence": <0.0-1.0>}}. No markdown, no explanation.'
     )
+    _market_user_msg = (
+        f"MARKET: {title}\n"
+        f"CURRENT PRICE: {price}¢\n"
+        f"DAYS TO CLOSE: {days if days else 'unknown'}\n\n"
+        f'Respond ONLY with JSON: {{"estimated_probability": <0.0-1.0>, '
+        f'"confidence": <0.0-1.0>}}. No markdown, no explanation.'
+    )
+
+    if _XPULSE_SYSTEM_PROMPT:
+        cli_cmd = ["claude", "--system", _XPULSE_SYSTEM_PROMPT, "-p", _market_user_msg, "--model", "haiku"]
+        xpulse_prompt = _market_user_msg  # used by Ollama fallback below
+    else:
+        cli_cmd = ["claude", "-p", _free_prompt, "--model", "haiku"]
+        xpulse_prompt = _free_prompt
 
     # Try Claude CLI first (Max subscription — $0 cost)
     try:
         result = _sp.run(
-            ["claude", "-p", xpulse_prompt, "--model", "haiku"],
+            cli_cmd,
             capture_output=True, text=True, timeout=30,
             cwd=str(Path.home()) if hasattr(Path, 'home') else "/tmp",
             start_new_session=True,

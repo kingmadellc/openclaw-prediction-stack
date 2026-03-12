@@ -10,3 +10,12 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Premium content — never commit these
+prompt-lab/
+kelly_config.json
+ensemble_weights.json
+market_filter.json
+sports_model_weights.json
+xpulse-prompt.md
+prompt.md
