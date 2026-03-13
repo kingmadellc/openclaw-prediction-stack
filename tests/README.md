@@ -35,6 +35,8 @@ Critical three-layer filter verification:
 - **Category blocking**: Sports, streaming, celebrities excluded
 - **Signal quality gates**: Price thresholds, politics noise, coinflips at midrange prices
 
+Sports coverage is intentionally excluded from the production stack. The blocklist tests enforce that policy because recent evaluation did not show durable model edge in sports.
+
 **Key test classes:**
 - `TestWeatherAndEntertainmentBlocking`: Ticker prefix blocklist verification
 - `TestPriceThresholdBlocking`: Price threshold pattern detection (e.g., "Bitcoin below $50k")

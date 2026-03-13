@@ -45,7 +45,6 @@ Example:
 
 ```bash
 python kalshi_commands.py scan            # macro/default markets
-python kalshi_commands.py scan sports     # sports-only filter
 ```
 
 **Output**: Top 8 markets ranked by heuristic edge score. Shows bid/ask, spread (%), volume, OI, days to expiration, and composite score.
@@ -95,7 +94,6 @@ Last: 35¢ | Vol 24h: 1,234 | Total vol: 12,345
 
 ```bash
 python kalshi_commands.py markets          # macro-heavy default
-python kalshi_commands.py markets sports   # sports opportunities
 python kalshi_commands.py markets all      # everything in cache
 ```
 
@@ -207,10 +205,7 @@ See [references/blocklist.md](references/blocklist.md) for complete list.
 
 ### Sports Filter
 
-When using `scan sports`:
-- Includes only markets with sports-related keywords: NFL, NBA, MLB, NHL, MLS, NCAA, esports, tennis, etc.
-- Excludes sports markets from default scan
-- Configurable via `sports_tokens` in code
+Sports markets are intentionally excluded from the production stack. Recent evaluation did not show durable model edge there, so the system does not route sports markets into scanning or execution.
 
 ### Time Window
 
@@ -326,7 +321,7 @@ All output strips Markdown for iMessage compatibility. Emoji indicators:
 | 🔻 | Moderate loss (>0%) |
 | ➖ | Break-even |
 | 🎯 | Live scan results |
-| 🏀 | Sports markets |
+| 🏀 | Sports excluded / blocked |
 | 💵 | Cash/financial data |
 | 📊 | Market data |
 | 📎 | Ticker link |
@@ -465,7 +460,7 @@ Back off for 1 minute. The scanner makes ~50-100 API calls per scan.
 
 ### No markets after filtering
 
-All 600 open markets filtered out by spread/volume/timeframe. Try `scan sports` for different category.
+All 600 open markets filtered out by spread/volume/timeframe. This stack intentionally excludes sports; try widening your non-sports filters instead.
 
 ## Advanced Usage
 
@@ -499,7 +494,6 @@ To scan without placing orders:
 
 ```bash
 python kalshi_commands.py scan
-python kalshi_commands.py scan sports
 # Review output; do NOT call execute
 ```
 

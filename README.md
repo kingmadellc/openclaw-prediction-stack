@@ -5,6 +5,8 @@ Ten autonomous skills that scan, analyze, compare, and trade prediction markets 
 <!-- CODEX: synchronized public stack docs with the reference implementation and added an explicit verification path. -->
 **v1.0** — 10-skill stack: 8 runtime skills plus the setup wizard and orchestrator. 5 of 10 skills published on [ClawHub](https://clawhub.ai), remaining 5 queued. First prediction market skill suite on ClawHub.
 
+Sports markets are intentionally excluded from the current stack. Recent evaluation did not show durable model edge there, so the production system focuses on non-sports categories where the model performs better.
+
 ## Quick Start
 
 ```bash

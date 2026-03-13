@@ -104,7 +104,7 @@ Fetches all open markets from Kalshi and applies pre-filters:
 - **Ticker prefixes**: KXHIGH, KXLOW, KXRAIN, KXSNOW, INX, NASDAQ (weather, intraday noise)
 - **Category slugs**: weather, climate, entertainment, sports, social-media
 - **Micro-timeframes**: "in next 15 min", "in next 5 hours" (coin flips)
-- **Sports tokens**: NFL, NBA, soccer, esports (tracked separately)
+- **Sports tokens**: NFL, NBA, soccer, esports (blocked from the production stack)
 
 **Timeframe Gates:**
 - Minimum days to close: 7 (default)
@@ -236,7 +236,7 @@ weather, climate, entertainment, sports, social-media, streaming, celebrities
 "price down in next"
 ```
 
-**Sports Tokens (Tracked Separately, Not Blocked):**
+**Sports Tokens (Blocked From The Production Stack):**
 - Major leagues: NFL, NBA, MLB, NHL, MLS, NCAA, PGA, UFC, WWE
 - Soccer: Premier League, La Liga, Serie A, Bundesliga, Champions League, Copa
 - Esports: Valorant, League of Legends, CS:GO, Dota, Overwatch
@@ -245,7 +245,7 @@ weather, climate, entertainment, sports, social-media, streaming, celebrities
 ### Why These Filters?
 
 - **Weather + Intraday**: Near-pure noise — impossible to extract edge
-- **Sports**: Requires domain-specific model training (separate system)
+- **Sports**: Intentionally excluded. Recent evaluation did not show durable model edge, so sports are not part of the current production stack.
 - **Entertainment**: Celebrity/social media volatility — not analyzable with Claude
 - **Micro-timeframe**: Spreads dominate, zero informational edge
 - **Blocklist philosophy**: Cut the bottom 80% of opportunities (noise) to focus Claude on the top 20% (signal)
