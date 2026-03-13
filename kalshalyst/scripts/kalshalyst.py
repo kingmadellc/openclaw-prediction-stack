@@ -18,6 +18,7 @@ Usage:
 
 import json
 import re
+import sys
 import time
 import logging
 from datetime import datetime, timezone
@@ -249,6 +250,15 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
     min_days = cfg.get("min_days_to_close", 7)
     max_days = cfg.get("max_days_to_close", 365)
     max_pages = cfg.get("max_pages", 10)
+    fresh_mode = cfg.get("fresh_mode", False)
+    max_age_hours = cfg.get("fresh_max_age_hours", 48)
+
+    if fresh_mode:
+        min_volume = 0
+        min_days = 2
+        logger.info(
+            f"FRESH MODE: relaxed filters (min_vol=0, min_days=2, max_age={max_age_hours}h)"
+        )
 
     all_markets = []
     cursor = None
@@ -290,7 +300,14 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
 
     # Pre-filter
     filtered = []
-    stats = {"no_book": 0, "blocked": 0, "sports": 0, "volume": 0, "timeframe": 0}
+    stats = {
+        "no_book": 0,
+        "blocked": 0,
+        "sports": 0,
+        "volume": 0,
+        "timeframe": 0,
+        "stale": 0,
+    }
 
     for m in all_markets:
         ticker = m.get("ticker", "")
@@ -337,6 +354,11 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
             stats["timeframe"] += 1
             continue
 
+        market_age_hours = _calc_market_age_hours(m)
+        if fresh_mode and (market_age_hours is None or market_age_hours > max_age_hours):
+            stats["stale"] += 1
+            continue
+
         filtered.append({
             "ticker": ticker,
             "title": title[:80],
@@ -347,13 +369,15 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
             "volume": volume,
             "open_interest": m.get("open_interest", 0) or 0,
             "days_to_close": days_to_close,
+            "market_age_hours": market_age_hours,
             "expiration_time": m.get("expiration_time", ""),
             "is_sports": is_sports,
         })
 
     logger.info(
         f"Fetch: {len(filtered)} passed filters (blocked={stats['blocked']}, "
-        f"sports_tagged={stats['sports']}, volume={stats['volume']}, timeframe={stats['timeframe']})"
+        f"sports_tagged={stats['sports']}, volume={stats['volume']}, "
+        f"timeframe={stats['timeframe']}, stale={stats['stale']})"
     )
     return filtered
 
@@ -367,6 +391,20 @@ def _calc_days_to_close(m: dict) -> Optional[float]:
         exp_str = expiration.replace("Z", "+00:00")
         exp_dt = datetime.fromisoformat(exp_str)
         return max(0, (exp_dt - datetime.now(timezone.utc)).total_seconds() / 86400)
+    except (ValueError, TypeError):
+        return None
+
+
+def _calc_market_age_hours(m: dict) -> Optional[float]:
+    """Calculate hours since market opened for trading."""
+    open_time = m.get("open_time", "")
+    if not open_time or not isinstance(open_time, str):
+        return None
+    try:
+        open_str = open_time.replace("Z", "+00:00")
+        open_dt = datetime.fromisoformat(open_str)
+        age_hours = (datetime.now(timezone.utc) - open_dt).total_seconds() / 3600
+        return max(0, age_hours)
     except (ValueError, TypeError):
         return None
 
@@ -447,6 +485,8 @@ def _apply_market_filter(edges: list[dict], cfg: dict) -> list[dict]:
     min_conf = cfg.get("min_confidence", 0.2)
     exclude_fair = cfg.get("exclude_fair_direction", True)
     max_spread = cfg.get("max_spread_cents", 10)
+    if cfg.get("fresh_mode", False):
+        max_spread = 25
 
     before = len(edges)
     filtered = []
@@ -500,6 +540,8 @@ def format_insight(edge: dict) -> dict:
         "volume": edge.get("volume", 0),
         "open_interest": edge.get("open_interest", 0),
         "days_to_close": edge.get("days_to_close"),
+        "market_age_hours": edge.get("market_age_hours"),
+        "is_fresh": (edge.get("market_age_hours") or 999) <= 48,
         "market_prob": round(mkt, 4),
         "estimated_prob": round(est, 4),
         "edge_pct": edge.get("edge_pct", 0),
@@ -519,11 +561,15 @@ def run_kalshalyst(client, cfg: dict, dry_run: bool = False) -> bool:
     # Phase 1: Fetch
     markets = fetch_kalshi_markets(client, cfg)
     if not markets:
-        logger.info("Kalshalyst: no markets passed filters")
+        if cfg.get("fresh_mode", False):
+            logger.info("FRESH: No new markets in last 48h")
+        else:
+            logger.info("Kalshalyst: no markets passed filters")
         return False
 
     # Phase 3+4: Estimate + edge
     edges = calculate_edges(markets, cfg)
+    edges = _apply_market_filter(edges, cfg)
 
     # Phase 5: Cache + alert
     cache_payload = {
@@ -573,9 +619,70 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Kalshalyst")
     parser.add_argument("--dry-run", action="store_true", help="Don't send alerts")
     parser.add_argument("--force", action="store_true", help="Force run (ignore interval)")
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Scan only markets listed in last 48h with relaxed filters",
+    )
 
     args = parser.parse_args()
+    cfg = {}
+    if args.fresh:
+        cfg["fresh_mode"] = True
 
-    # Initialize Kalshi client (you'll need to implement this with your config)
-    # For now, this is a stub
-    logger.error("Kalshi client not initialized — implement with your credentials")
+    # ── Load config from ~/.openclaw/config.yaml ──
+    try:
+        import yaml
+    except ImportError:
+        logger.error("pyyaml not installed — run: pip3 install pyyaml")
+        sys.exit(1)
+
+    config_path = Path.home() / ".openclaw" / "config.yaml"
+    if not config_path.exists():
+        logger.error(f"Config not found: {config_path}")
+        sys.exit(1)
+
+    with open(config_path) as f:
+        file_config = yaml.safe_load(f) or {}
+
+    kalshi_cfg = file_config.get("kalshi", {})
+    key_id = kalshi_cfg.get("api_key_id", "")
+    pk_file = kalshi_cfg.get("private_key_file", "")
+    pk_path = Path(pk_file).expanduser()
+    if not pk_path.is_absolute():
+        pk_path = Path.home() / ".openclaw" / "keys" / pk_path
+
+    if not key_id or not pk_path.exists():
+        logger.error(f"Kalshi credentials missing — key_id={bool(key_id)}, pk_exists={pk_path.exists()}")
+        sys.exit(1)
+
+    # ── Initialize Kalshi SDK client ──
+    try:
+        try:
+            from kalshi_python_sync import Configuration, KalshiClient
+        except ImportError:
+            from kalshi_python import Configuration, KalshiClient
+
+        base_url = "https://api.elections.kalshi.com/trade-api/v2"
+        sdk_config = Configuration(host=base_url)
+        with open(pk_path, "r") as f:
+            sdk_config.private_key_pem = f.read()
+        sdk_config.api_key_id = key_id
+        client = KalshiClient(sdk_config)
+        sdk_config.private_key_pem = None  # clear PEM from memory
+
+        # Verify auth
+        try:
+            client.get_positions(limit=1)
+        except (TypeError, AttributeError):
+            pass  # SDK version difference — client is still valid
+        logger.info("Kalshi client initialized successfully")
+    except Exception as e:
+        logger.error(f"Kalshi client init failed: {e}")
+        sys.exit(1)
+
+    # ── Run pipeline ──
+    if args.force:
+        cfg["force"] = True
+    success = run_kalshalyst(client, cfg, dry_run=args.dry_run)
+    sys.exit(0 if success else 1)

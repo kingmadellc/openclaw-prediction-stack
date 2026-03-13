@@ -6,10 +6,12 @@ instead of consensus-matching estimates that yield zero edge.
 
 Assumes limit orders (no spread penalty). Edge = |estimate - market price|.
 
-Falls back to local Qwen if Claude is unavailable (cooldown/offline).
+Estimator chain: Claude CLI (Max subscription, $0) → Anthropic API → Qwen local.
 """
 
 import json
+import os
+import subprocess
 import time
 import logging
 from pathlib import Path
@@ -18,17 +20,91 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-# ── Claude Interface ──────────────────────────────────────────────────────
+# ── Claude CLI Interface (Primary — uses Max subscription at $0) ──────────
 
-def _claude_estimate(prompt: str, system: str, timeout: int = 45) -> Optional[dict]:
-    """Call Claude Sonnet via Anthropic API for a probability estimate.
+def _claude_cli_estimate(prompt: str, system: str, timeout: int = 60) -> Optional[dict]:
+    """Call Claude via CLI (claude -p) which uses Max subscription.
 
-    Requires ANTHROPIC_API_KEY in environment.
+    Zero marginal cost. Primary estimator path.
     """
+    try:
+        # Combine system + user prompt for CLI
+        full_prompt = f"{system}\n\n---\n\n{prompt}"
+
+        result = subprocess.run(
+            ["claude", "-p", full_prompt, "--output-format", "text"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            start_new_session=True,  # Prevent SIGTTOU when backgrounded
+        )
+
+        if result.returncode != 0:
+            stderr = result.stderr.strip()[:200] if result.stderr else ""
+            logger.warning(f"Claude CLI: non-zero exit ({result.returncode}): {stderr}")
+            return None
+
+        text = result.stdout.strip()
+        if not text:
+            logger.warning("Claude CLI: empty response")
+            return None
+
+        return _parse_json_response(text)
+
+    except subprocess.TimeoutExpired:
+        logger.warning("Claude CLI: timeout (%ds)", timeout)
+        return None
+    except FileNotFoundError:
+        logger.warning("Claude CLI: 'claude' command not found — falling back to API")
+        return None
+    except Exception as e:
+        logger.error(f"Claude CLI error: {str(e)[:200]}")
+        return None
+
+
+# ── Claude API Interface (Fallback — requires ANTHROPIC_API_KEY) ──────────
+
+def _load_anthropic_key() -> Optional[str]:
+    """Load ANTHROPIC_API_KEY from env or ~/.openclaw/.env file."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+    # Try loading from .env file
+    env_path = Path.home() / ".openclaw" / ".env"
+    if env_path.exists():
+        try:
+            for line in env_path.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("export ANTHROPIC_API_KEY="):
+                    key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if key:
+                        os.environ["ANTHROPIC_API_KEY"] = key
+                        logger.info("Loaded ANTHROPIC_API_KEY from ~/.openclaw/.env")
+                        return key
+                elif line.startswith("ANTHROPIC_API_KEY="):
+                    key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if key:
+                        os.environ["ANTHROPIC_API_KEY"] = key
+                        logger.info("Loaded ANTHROPIC_API_KEY from ~/.openclaw/.env")
+                        return key
+        except Exception as e:
+            logger.warning(f"Failed to read .env: {e}")
+    return None
+
+
+def _claude_api_estimate(prompt: str, system: str, timeout: int = 45) -> Optional[dict]:
+    """Call Claude Sonnet via Anthropic API. Fallback if CLI is unavailable.
+
+    Requires ANTHROPIC_API_KEY in environment or ~/.openclaw/.env. Costs per-token.
+    """
+    if not _load_anthropic_key():
+        logger.debug("Claude API: no ANTHROPIC_API_KEY found, skipping")
+        return None
+
     try:
         import anthropic
 
-        client = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY from env
+        client = anthropic.Anthropic()
 
         message = client.messages.create(
             model="claude-sonnet-4-5",
@@ -37,37 +113,64 @@ def _claude_estimate(prompt: str, system: str, timeout: int = 45) -> Optional[di
             messages=[{"role": "user", "content": prompt}],
         )
 
-        # Extract text
         text = ""
         for block in message.content:
             if hasattr(block, "text"):
                 text += block.text
 
         if not text:
-            logger.warning("Claude: empty response")
+            logger.warning("Claude API: empty response")
             return None
 
-        # Parse JSON
-        text = text.strip()
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Try to extract JSON from response
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                return json.loads(text[start:end])
-
-        logger.warning("Claude: failed to parse JSON from response")
-        return None
+        return _parse_json_response(text.strip())
 
     except Exception as e:
         error_str = str(e)
         if "api_key" in error_str.lower() or "auth" in error_str.lower():
-            logger.error(f"Claude: auth error — check ANTHROPIC_API_KEY (error: {error_str[:80]})")
+            logger.error(f"Claude API: auth error (key may be invalid)")
         else:
-            logger.error(f"Claude error: {error_str[:200]}")
+            logger.error(f"Claude API error: {error_str[:200]}")
         return None
+
+
+# ── JSON Parser ──────────────────────────────────────────────────────────
+
+def _parse_json_response(text: str) -> Optional[dict]:
+    """Extract JSON from Claude response text."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start:end])
+            except json.JSONDecodeError:
+                pass
+    logger.warning("Claude: failed to parse JSON from response")
+    return None
+
+
+# ── Unified Estimator (CLI → API → Qwen) ─────────────────────────────────
+
+def _claude_estimate(prompt: str, system: str, timeout: int = 60) -> Optional[dict]:
+    """Call Claude with fallback chain: CLI (Max, $0) → API (per-token) → None.
+
+    Qwen fallback is handled at the batch level, not here.
+    """
+    # 1. Try CLI first (Max subscription, zero cost)
+    result = _claude_cli_estimate(prompt, system, timeout=timeout)
+    if result:
+        logger.debug("Claude CLI: success")
+        return result
+
+    # 2. Fall back to API (per-token cost)
+    result = _claude_api_estimate(prompt, system, timeout=timeout)
+    if result:
+        logger.debug("Claude API: success (fallback)")
+        return result
+
+    return None
 
 
 # ── System Prompt ──────────────────────────────────────────────────────────
