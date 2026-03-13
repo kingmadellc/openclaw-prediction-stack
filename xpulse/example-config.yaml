@@ -1,5 +1,7 @@
 # Example Xpulse Configuration
 # Copy to ~/.openclaw/config.yaml and fill in your credentials
+#
+# CODEX: synchronized example config with the runtime default model.
 
 kalshi:
   enabled: true
@@ -9,7 +11,7 @@ kalshi:
 
 ollama:
   enabled: true
-  model: "qwen:latest"           # or qwen3:latest if available
+  model: "qwen3:latest"
   timeout_seconds: 30
 
 xpulse:

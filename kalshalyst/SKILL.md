@@ -29,6 +29,8 @@ The key insight: blind estimation (not seeing prices) produces consensus-matchin
 
 ### API Keys & Credentials
 
+<!-- CODEX: reconciled skill requirements and cost guidance with the public code path. -->
+
 1. **Kalshi API Key** (free at kalshi.com)
    - Sign up at https://kalshi.com
    - Navigate to Settings → API
@@ -38,7 +40,8 @@ The key insight: blind estimation (not seeing prices) produces consensus-matchin
 2. **Anthropic API Key** (for Claude Sonnet)
    - Create account at https://console.anthropic.com
    - Generate an API key
-   - Budget: ~$0.20-0.50 per edge scanner run (50 markets analyzed)
+   - The public reference implementation calls Anthropic directly
+   - Budget: variable by scan volume; expect non-zero Claude cost if you run frequent scans
 
 3. **Polygon.io API Key** (optional, free tier available)
    - Sign up at https://polygon.io
@@ -56,7 +59,7 @@ The key insight: blind estimation (not seeing prices) produces consensus-matchin
 - Optional (for local fallback estimation):
   - Ollama (https://ollama.ai) with Qwen model
   - Install from https://ollama.ai (macOS, Linux, Windows)
-  - Then: `ollama pull qwen:latest`
+  - Then: `ollama pull qwen3:latest`
 
 ## Configuration
 
@@ -647,16 +650,13 @@ print(result.reason)  # Explains why contracts = 0
   - Claude: 50-80 calls (estimate_batch)
   - Polygon: 2 calls (economic indicators, every 12 hours)
 - **Cost per run:**
-  - Claude: ~$0.20 (50 markets × 512 tokens × $0.00003)
+  - Claude: variable by model and usage volume
   - Polygon: ~$0 (free tier)
   - Kalshi: $0 (read-only)
 
 ### Scaling
 
-For 10 runs per day:
-- **Claude cost:** ~$2/day = $60/month
-- **Polygon:** Free
-- **Total:** ~$60/month for intelligence system
+For scheduled operation, Claude spend scales directly with your scan frequency and model selection. If you want a zero-API-cost fallback, keep Ollama/Qwen available and treat it as a lower-quality backup path rather than the primary estimator.
 
 ## OpenClaw Ecosystem Integration
 

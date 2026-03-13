@@ -37,7 +37,7 @@ Xpulse is a real-time X/Twitter signal scanner optimized for prediction market t
 
 - **Ollama** (https://ollama.ai) with Qwen model
   - Install from https://ollama.ai (macOS, Linux, Windows)
-  - Then: `ollama pull qwen:latest`
+  - Then: `ollama pull qwen3:latest`
   - Must be running: `ollama serve` (background process)
 
 ### Kalshi API (for position matching)
@@ -59,7 +59,7 @@ kalshi:
 
 ollama:
   enabled: true
-  model: "qwen:latest"      # or qwen3:latest if available
+  model: "qwen3:latest"
   timeout_seconds: 30
 
 xpulse:

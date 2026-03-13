@@ -1,6 +1,7 @@
 # Xpulse
 
 Real-time X/Twitter social signal scanner for prediction market traders. Zero API cost — scans via DuckDuckGo with two-stage local Qwen AI filtering.
+<!-- CODEX: synchronized the documented Ollama model with the runtime default. -->
 
 ## Install
 
@@ -10,7 +11,7 @@ clawhub install xpulse
 
 ## Quick Start
 
-1. Install Ollama from https://ollama.ai and pull Qwen: `ollama pull qwen:latest`
+1. Install Ollama from https://ollama.ai and pull Qwen: `ollama pull qwen3:latest`
 2. Get a Kalshi API key at https://kalshi.com (Settings → API)
 3. Configure topics and credentials in `~/.openclaw/config.yaml`
 4. Run: `python scripts/xpulse.py`

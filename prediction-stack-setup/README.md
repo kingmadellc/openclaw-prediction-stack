@@ -2,7 +2,8 @@
 
 Interactive setup wizard for the [OpenClaw Prediction Market Trading Stack](https://github.com/kingmadellc/openclaw-prediction-stack).
 
-Turns 8 standalone skills into a connected, proactive trading system. Creates scheduled scans, enables iMessage delivery, configures API keys, and tests the full pipeline — in under 5 minutes.
+<!-- CODEX: reconciled stack size and cost language with the public reference implementation. -->
+Turns the 10-skill stack into a connected, proactive trading system. Creates scheduled scans, enables iMessage delivery, configures API keys, and tests the full pipeline — in under 5 minutes.
 
 ## Quick Start
 
@@ -25,4 +26,4 @@ Turns 8 standalone skills into a connected, proactive trading system. Creates sc
 
 ## Cost
 
-~$60/month (Claude Sonnet for Kalshalyst). Everything else is free.
+The reference implementation assumes Anthropic API spend for Claude-based Kalshalyst runs, with local Qwen handling Xpulse and fallback inference. Everything else is free-tier or local.

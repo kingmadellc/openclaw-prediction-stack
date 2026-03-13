@@ -1,6 +1,7 @@
 # Kalshalyst
 
 > **IMPORTANT: This software is for informational and educational purposes only. It is not financial advice. Trading prediction markets involves substantial risk of loss. You may lose some or all of your invested capital. Use at your own risk. See [DISCLAIMER.md](DISCLAIMER.md) and [LICENSE](LICENSE) for full terms.**
+<!-- CODEX: aligned README cost language with the public Anthropic-backed reference implementation. -->
 
 Autonomous prediction market trading system for Kalshi. Scans markets, estimates mispricings with Claude, sizes positions with Kelly Criterion, and executes trades — all hands-off.
 
@@ -34,7 +35,7 @@ Designed for hands-off operation via launchd (macOS) or cron. Recommended: 4 sca
 
 ## Cost
 
-~$0 with Claude Code CLI (Max subscription). ~$0.20/scan via Anthropic API fallback. Kalshi API is free.
+Reference path: Anthropic-backed Claude estimation plus optional free local Qwen fallback. Typical Claude spend is variable by run volume; Kalshi API remains free.
 
 ## Full Documentation
 
