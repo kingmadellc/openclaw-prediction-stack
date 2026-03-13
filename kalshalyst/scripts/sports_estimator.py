@@ -1,22 +1,20 @@
 """Sports market probability estimation — data-driven model.
 
-PRODUCTION — Market-anchored prediction approach.
+EXPERIMENTAL — NOT PRODUCTION-READY. Corrected eval (March 13, 2026) shows
+model does NOT beat market overall (Brier 0.1984 vs 0.1979, model WORSE).
+Only soccer ELO has demonstrated edge (-0.006 delta). Previous "beating"
+claims were artifact of P1-A bug (eval scored wrong side for ~80% of entries).
 
-CORE INSIGHT (validated on 2,544 backtested markets across 9 sports):
+CORE INSIGHT (corrected eval on 8,983 enriched markets across 9 sports):
     Raw model predictions (ELO, etc.) are WORSE than market prices.
     Market-anchored prediction (nudge market price, don't replace it) is the
-    only approach that consistently beats the market baseline.
+    only viable approach. Even then, only soccer ELO shows real edge.
 
-STRATEGY:
-    1. HOCKEY — Market price + 10% nudge toward team ELO probability.
-       Uses 3-season NHL data, home advantage +40, K=20.
-       Validated: Brier 0.2426 vs market 0.2432, 53% edge accuracy.
-
-    2. ALL OTHER SPORTS — Market price + 10% nudge toward 0.50.
-       Exploits favorite-longshot bias (markets overweight favorites).
-       Validated: Brier 0.1870 on 2,444 entries (beating market 0.1884).
-
-    3. NO MARKET PRICE — Return None (can't estimate without anchor).
+CORRECTED RESULTS (March 13, 2026):
+    1. SOCCER ELO — Brier 0.1753 vs market 0.1815 (-0.006 delta, BEATING)
+    2. BASKETBALL ELO — Brier 0.1955 vs market 0.1906 (+0.005, WORSE)
+    3. HOCKEY ELO — Brier 0.2356 vs market 0.2357 (wash)
+    4. CENTER-NUDGE — Brier 0.1980 vs ~0.198 market (wash)
 
 ARCHITECTURE:
     The estimator outputs the same schema as claude_estimator.py so it plugs
@@ -24,20 +22,21 @@ ARCHITECTURE:
 
 PREMIUM GATE:
     This module is PREMIUM ONLY. The sports filter in _SPORTS_TOKENS blocks all
-    sports markets from reaching the free-tier Claude estimator. When this module
-    is production-ready, the auto_trader will route sports markets here instead
-    of skipping them — but only for premium users who have:
-      ~/sports_estimator_config.json  (config file acts as the license gate)
+    sports markets from reaching the free-tier Claude estimator. Auto_trader
+    sports routing is DISABLED until model demonstrates consistent edge.
+    Config file acts as the license gate:
+      ~/sports_estimator_config.json
 
 DATA PIPELINES:
-    - Hockey: ~/prompt-lab/hockey_data.py (NHL API → team ELO + home/away + form)
+    - Soccer: ~/prompt-lab/soccer_data.py (openfootball, 5 leagues, ONLY PIPELINE WITH EDGE)
+    - Hockey: ~/prompt-lab/hockey_data.py (NHL API → team ELO, NO DEMONSTRATED EDGE)
+    - Basketball: ~/prompt-lab/basketball_data.py (hardcoded baseline, WORSE THAN MARKET)
     - Tennis: ~/prompt-lab/tennis_data.py (DISABLED — stale 2024 Sackmann data)
-    - Others: center-nudge only (no sport-specific model yet)
 
 AUTORESEARCH TARGET:
     Editable file: ~/prompt-lab/sports_model_weights.json
     Eval metric: Brier score on resolved sports markets
-    Backtest: ~/prompt-lab/sports_backtest.json (2,575 enriched entries, 9 sports)
+    Backtest: ~/prompt-lab/sports_backtest.json (9,107 entries, 8,983 enriched, 9 sports)
 
 USAGE:
     from sports_estimator import estimate_sports_market
@@ -587,7 +586,7 @@ def _estimate_center_nudge(
 
     This exploits the well-documented favorite-longshot bias where
     prediction markets systematically overweight favorites.
-    Validated: Brier 0.1870 on 2,444 entries (beating market 0.1884).
+    Corrected eval (March 13): Brier 0.1980 vs market ~0.198 (no demonstrated edge).
     """
     nudge = weights.get("center_nudge", 0.10)
     adjusted = market_prob + nudge * (0.50 - market_prob)
@@ -638,8 +637,8 @@ def get_market_scope_description(include_sports: bool = False) -> str:
     """
     base_scope = (
         "Policy, politics, technology, economics, and macro markets — "
-        "categories where our AI estimation model has a proven 90%+ edge accuracy "
-        "based on backtesting across 84 resolved markets."
+        "categories where the AI estimation model focuses its analysis "
+        "based on backtesting across resolved markets."
     )
 
     if include_sports:
