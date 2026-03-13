@@ -270,7 +270,7 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
             stats["no_book"] += 1
             continue
 
-        if _is_blocked(ticker, category, title):
+        if _is_blocked(ticker, category, title, price_cents=price):
             stats["blocked"] += 1
             continue
 
