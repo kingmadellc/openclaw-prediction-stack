@@ -53,6 +53,10 @@ XPULSE_CFG = CONFIG.get("xpulse", {})
 KALSHI_CFG = CONFIG.get("kalshi", {})
 OLLAMA_CFG = CONFIG.get("ollama", {"enabled": True, "model": "qwen3:latest", "timeout_seconds": 15})
 
+# qwen3 has a thinking/reasoning mode on by default that massively inflates latency.
+# Prepend /no_think to all prompts to disable it and get fast JSON responses.
+_QWEN3_NO_THINK = OLLAMA_CFG.get("model", "").startswith("qwen3")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 1: Signal Detection
@@ -117,6 +121,10 @@ def _call_ollama(prompt: str, timeout: int = 15) -> Optional[dict]:
     """
     model = OLLAMA_CFG.get("model", "qwen3:latest")
 
+    # Disable qwen3 thinking mode for fast responses
+    if _QWEN3_NO_THINK:
+        prompt = "/no_think\n" + prompt
+
     # Primary: HTTP API (supports JSON format natively)
     try:
         import urllib.request
@@ -127,6 +135,7 @@ def _call_ollama(prompt: str, timeout: int = 15) -> Optional[dict]:
             "prompt": prompt,
             "format": "json",
             "stream": False,
+            "options": {"num_predict": 256},  # Cap output tokens — we only need short JSON
         }).encode("utf-8")
 
         req = urllib.request.Request(
@@ -180,7 +189,7 @@ def _analyze_signals_local(topic: str, posts: list) -> dict:
             f"\"direction\": \"bullish/bearish/neutral\", \"summary\": \"one line\"}}"
         )
 
-        timeout = OLLAMA_CFG.get("timeout_seconds", 30)
+        timeout = min(OLLAMA_CFG.get("timeout_seconds", 15), 20)  # Cap at 20s per topic
         parsed = _call_ollama(prompt, timeout=timeout)
 
         if not parsed:
@@ -264,7 +273,7 @@ def _filter_novel_signals(signals: list, history: list) -> list:
             "Respond in JSON: {\"keep\": [list of topic strings to keep], \"reasoning\": \"one line explaining why\"}"
         )
 
-        timeout = OLLAMA_CFG.get("timeout_seconds", 45)
+        timeout = min(OLLAMA_CFG.get("timeout_seconds", 15), 20)  # Cap at 20s
         parsed = _call_ollama(prompt, timeout=timeout)
 
         if not parsed:
@@ -455,11 +464,11 @@ def check_x_signals(state: dict, dry_run: bool = False, force: bool = False) -> 
         return None
 
     signals = []
-    with ThreadPoolExecutor(max_workers=min(len(topics), 4)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(topics), 2)) as executor:  # 2 workers max on Mac Mini
         futures = {executor.submit(_scan_topic, t): t for t in topics}
-        for future in as_completed(futures, timeout=60):
+        for future in as_completed(futures, timeout=30):  # 30s total for all topics
             try:
-                result = future.result(timeout=20)
+                result = future.result(timeout=10)
                 if result:
                     signals.append(result)
             except Exception as e:

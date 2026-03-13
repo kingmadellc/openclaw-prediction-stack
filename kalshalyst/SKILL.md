@@ -457,6 +457,12 @@ DEBUG=1 python -m kalshalyst.kalshalyst
 
 # Dry run (no alerts sent)
 python -m kalshalyst.kalshalyst --dry-run
+
+# Fresh-market scan (new listings from last 48 hours; relaxed liquidity filters)
+python -m kalshalyst.kalshalyst --fresh
+
+# Fresh-market dry run
+python -m kalshalyst.kalshalyst --fresh --dry-run
 ```
 
 ### As a Cron Job (Every 60 Minutes)
