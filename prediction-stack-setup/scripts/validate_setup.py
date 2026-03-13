@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 
 class ValidationResult:
     """Encapsulates validation result for a service."""
-    def __init__(self, service_name: str, passed: bool, required: bool = False):
+    # CODEX: default passed=False so validators can progressively fill the result.
+    def __init__(self, service_name: str, passed: bool = False, required: bool = False):
         self.service_name = service_name
         self.passed = passed
         self.required = required

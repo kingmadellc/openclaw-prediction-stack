@@ -2,6 +2,8 @@
 #
 # Copy this file to ~/.openclaw/config.yaml and fill in your credentials.
 # Lines marked REQUIRED must be set. Lines marked OPTIONAL enhance the stack.
+#
+# CODEX: reconciled this template with the current public runtime defaults.
 
 # ═══════════════════════════════════════════════════════
 # REQUIRED — Kalshi API (free at kalshi.com)
@@ -11,6 +13,9 @@ kalshi:
   enabled: true
   api_key_id: "YOUR_KALSHI_KEY_ID"                    # Settings → API Keys on kalshi.com
   private_key_file: "~/.openclaw/keys/kalshi-secret.pem"  # chmod 600 this file
+
+anthropic:
+  api_key: "YOUR_ANTHROPIC_API_KEY"                  # Required for the reference Kalshalyst path
 
 # ═══════════════════════════════════════════════════════
 # OPTIONAL — Polygon.io (free tier at polygon.io)

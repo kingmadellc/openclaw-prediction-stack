@@ -2,7 +2,8 @@
 
 Ten autonomous skills that scan, analyze, compare, and trade prediction markets — with a setup wizard that wires them into a proactive, scheduled system delivering intelligence to your phone.
 
-**v1.0** — Full stack operational. 5 of 10 skills published on [ClawHub](https://clawhub.ai), remaining 5 queued. First prediction market skill suite on ClawHub.
+<!-- CODEX: synchronized public stack docs with the reference implementation and added an explicit verification path. -->
+**v1.0** — 10-skill stack: 8 runtime skills plus the setup wizard and orchestrator. 5 of 10 skills published on [ClawHub](https://clawhub.ai), remaining 5 queued. First prediction market skill suite on ClawHub.
 
 ## Quick Start
 
@@ -14,7 +15,7 @@ git clone https://github.com/kingmadellc/openclaw-prediction-stack.git
 # "Set up my prediction stack"
 ```
 
-The [setup wizard](prediction-stack-setup/) walks you through API keys, delivery config, and scheduled jobs. Under 5 minutes to a fully operational trading system.
+The [setup wizard](prediction-stack-setup/) walks you through API keys, delivery config, and the six scheduled jobs that drive the runtime skills. See [OPERATIONS.md](OPERATIONS.md) for the post-setup verification checklist.
 
 ## The Stack
 
@@ -28,8 +29,8 @@ The [setup wizard](prediction-stack-setup/) walks you through API keys, delivery
 | 6 | [**Portfolio Drift Monitor**](portfolio-drift-monitor/) | Position drift alerts — snapshot comparison fires when any Kalshi position moves beyond threshold since last check. Directional indicators, rate-limited. |
 | 7 | [**Market Morning Brief**](market-morning-brief/) | Daily intelligence digest — aggregates portfolio P&L, top edges, divergences, social signals, crypto prices, Polymarket trends into a 30-second scan. Morning + evening editions. |
 | 8 | [**Personality Engine**](personality-engine/) | Six-system behavior engine — editorial voice, selective silence, variable timing, micro-initiations, context buffer, response tracking. Domain-agnostic with default trading config. |
-| 9 | [**Prediction Stack Orchestrator**](prediction-stack-orchestrator/) | Three-agent pipeline manager (Kalshalyst → Eval → Executor) for automated trading with validation loops, retry logic, and veto power. Routes markets through estimation and validates before execution. |
-| 10 | [**Prediction Stack Setup**](prediction-stack-setup/) | Setup wizard — detects installed skills, walks through API keys, creates cron jobs, enables heartbeat, tests iMessage delivery. Turns 10 standalone skills into a connected system. |
+| 9 | [**Prediction Stack Orchestrator**](prediction-stack-orchestrator/) | Premium/experimental three-agent pipeline manager (Kalshalyst → Eval → Executor) for automated trading with validation loops, retry logic, and veto power. Routes markets through estimation and validates before execution. |
+| 10 | [**Prediction Stack Setup**](prediction-stack-setup/) | Setup wizard — detects installed skills, walks through API keys, creates cron jobs, enables heartbeat, tests iMessage delivery. Wires the 10-skill stack into one operating system. |
 
 ## How They Connect
 
@@ -79,23 +80,21 @@ Most scans are **silent by design** — they only alert when something exceeds y
 
 ## Cost to Run
 
-**$0/month** if you have a Claude Max subscription. The LLM calls run through the Claude CLI at no additional cost — your subscription covers it.
+The public reference implementation uses the Anthropic API for Claude-based estimation in Kalshalyst, plus local Ollama for Qwen-backed fallbacks and Xpulse.
 
-No Claude subscription? The stack still works. Kalshalyst and Xpulse fall back to **Qwen** (local, free via Ollama) at degraded but functional accuracy — still meaningfully above coin-flip on edge detection. Every other skill in the stack (Command Centers, Arbiter, Drift Monitor, Morning Brief, Orchestrator) requires zero LLM calls.
+- Kalshalyst: variable Claude cost if you use Anthropic API directly; local Qwen fallback is free but lower quality
+- Xpulse: local Qwen only, no API cost
+- Everything else: no LLM cost
+- External APIs: Kalshi, Polymarket Gamma, DuckDuckGo, and Polygon free tiers are sufficient for the default setup
 
-All external APIs are free: Kalshi API, Polymarket Gamma API, DuckDuckGo search.
-
-| Component | Claude Max | Qwen (Free) |
-|-----------|-----------|-------------|
-| Kalshalyst edge scanning | Full accuracy | Degraded, above baseline |
-| Xpulse signal filtering | Full accuracy | Degraded, above baseline |
-| Everything else | No LLM needed | No LLM needed |
+If your OpenClaw runtime already routes Claude usage through a bundled subscription path, your incremental cost can be lower, but that is runtime-specific and not the assumption this repo validates.
 
 ## Requirements
 
 - [OpenClaw](https://openclaw.ai) agent
-- [Ollama](https://ollama.ai) with `qwen2.5:7b` (free, local) — or Claude Max subscription for full performance
+- [Ollama](https://ollama.ai) with `qwen3:latest` (free, local fallback and Xpulse runtime)
 - Kalshi API key (free at [kalshi.com](https://kalshi.com))
+- Anthropic API key for the reference Kalshalyst path
 - Optional: BlueBubbles for iMessage delivery
 
 ## Author

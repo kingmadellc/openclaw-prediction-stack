@@ -1,13 +1,14 @@
 ---
 name: Prediction Stack Setup
-description: "Interactive setup wizard for the OpenClaw Prediction Market Trading Stack. Detects installed skills, walks through API key configuration, creates cron jobs for automated scanning and alerts, enables heartbeat for ambient awareness, and tests iMessage delivery. Turns 8 standalone skills into a connected, proactive trading system in under 5 minutes. Run this after installing the stack — or anytime you need to reconfigure schedules, delivery targets, or alert thresholds."
+description: "Interactive setup wizard for the OpenClaw Prediction Market Trading Stack. Detects installed skills, walks through API key configuration, creates cron jobs for automated scanning and alerts, enables heartbeat for ambient awareness, and tests iMessage delivery. Wires the 10-skill stack into a connected, proactive trading system in under 5 minutes. Run this after installing the stack — or anytime you need to reconfigure schedules, delivery targets, or alert thresholds."
 ---
 
 # Prediction Stack Setup — One-Command System Activation
 
 ## Overview
 
-This skill wires the 8 skills of the OpenClaw Prediction Market Trading Stack into a connected, proactive system. Without setup, skills work individually when you ask for them. After setup, they run autonomously — scanning markets, detecting edges, monitoring positions, and delivering intelligence to your phone on a schedule.
+<!-- CODEX: reconciled setup docs with the 10-skill stack and the public Anthropic-backed reference path. -->
+This skill wires the 10-skill OpenClaw Prediction Market Trading Stack into a connected, proactive system. Without setup, skills work individually when you ask for them. After setup, the runtime skills run autonomously — scanning markets, detecting edges, monitoring positions, and delivering intelligence to your phone on a schedule.
 
 **What it does:**
 1. Detects which stack skills are installed
@@ -23,6 +24,7 @@ This skill wires the 8 skills of the OpenClaw Prediction Market Trading Stack in
 ## When to Use This Skill
 
 - You just installed the Prediction Market Trading Stack (all 8 skills or any subset)
+- You just installed the Prediction Market Trading Stack (all 10 skills or any subset)
 - You want to activate automated scanning and alerts
 - You need to change your delivery target (new phone, new email handle)
 - You want to adjust scan schedules or alert thresholds
@@ -33,7 +35,7 @@ This skill wires the 8 skills of the OpenClaw Prediction Market Trading Stack in
 
 ### Required
 - **OpenClaw** installed and running (gateway active)
-- **At least one stack skill** installed (any of the 8)
+- **At least one stack skill** installed (any of the 10)
 - **Kalshi account** with API credentials (free at kalshi.com)
 - **Anthropic API key** (for Claude Sonnet estimation in Kalshalyst)
 
@@ -52,7 +54,7 @@ First, check which stack skills are installed. Run this command:
 openclaw skills list | grep -E "kalshalyst|kalshi-command|polymarket-command|prediction-market-arbiter|xpulse|portfolio-drift|market-morning-brief|personality-engine"
 ```
 
-**The 8 stack skills:**
+**The 10 stack skills:**
 
 | Skill | Role | Required For |
 |-------|------|-------------|
@@ -64,10 +66,12 @@ openclaw skills list | grep -E "kalshalyst|kalshi-command|polymarket-command|pre
 | Portfolio Drift Monitor | Position monitoring | Drift alerts between briefs |
 | Market Morning Brief | Daily digest | Consolidated morning/evening intelligence |
 | Personality Engine | Agent behavior | Consistent voice across all output |
+| Prediction Stack Orchestrator | Premium/experimental pipeline manager | Validation and execution routing |
+| Prediction Stack Setup | Setup wizard | Validation, scheduling, delivery wiring |
 
 **Minimum viable stack:** Kalshalyst + Kalshi Command Center + Market Morning Brief. These three give you edge detection, execution, and daily digest. Everything else enriches the system.
 
-**Full stack:** All 8 skills. Morning Brief pulls from every cache and delivers maximum intelligence density.
+**Full stack:** All 10 skills. Morning Brief pulls from every cache and the orchestrator adds a premium/experimental automation path on top.
 
 Install missing skills:
 ```bash
@@ -536,9 +540,9 @@ openclaw cron remove <ID>  # for each job
 | Polygon.io | Free | Free tier sufficient |
 | DuckDuckGo | Free | Via Xpulse |
 | Ollama/Qwen | Free | Local inference |
-| Claude Sonnet | ~$60/month | 10 edge scans/day × $0.20/scan |
+| Claude Sonnet | Variable | Depends on model, prompt size, and scan frequency |
 | BlueBubbles | Free | Self-hosted on Mac |
-| **Total** | **~$60/month** | Claude is the only paid dependency |
+| **Total** | **Variable** | Claude is the only paid dependency in the public reference path |
 
 ## Troubleshooting
 

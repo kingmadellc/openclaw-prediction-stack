@@ -183,8 +183,8 @@ def format_kalshalyst_section(cache_path, config, debug=False):
             market_prob = edge.get("market_prob", 0.5)
             estimated_prob = edge.get("estimated_prob", 0.5)
 
-            # Determine side
-            side = "NO" if estimated_prob > market_prob else "YES"
+            # CODEX: if the estimate is above the market, the actionable side is YES.
+            side = "YES" if estimated_prob > market_prob else "NO"
 
             edge_pct = edge.get("edge_pct", 0)
             confidence = edge.get("confidence", 0)

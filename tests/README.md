@@ -1,24 +1,28 @@
 # OpenClaw Prediction Stack Test Suite
 
-Core test coverage for the OpenClaw Prediction Stack's critical functions. **137 passing tests** across four test modules covering blocklist filtering, JSON parsing, Kelly Criterion sizing, and signal quality verification.
+<!-- CODEX: updated test inventory after adding setup, cache-contract, and doc-consistency coverage. -->
+Core test coverage for the OpenClaw Prediction Stack's critical functions. **153 passing tests** across seven test modules covering blocklist filtering, JSON parsing, Kelly Criterion sizing, signal quality verification, setup validation, cache contracts, and doc consistency.
 
 ## Quick Start
 
 ```bash
 # Install pytest (one-time)
-pip install pytest
+python3 -m pip install pytest
 
 # Run all tests
-pytest . -v
+python3 -m pytest . -v
 
 # Run specific test module
-pytest test_blocklist.py -v
-pytest test_json_parsing.py -v
-pytest test_kelly.py -v
-pytest test_signal_filter.py -v
+python3 -m pytest test_blocklist.py -v
+python3 -m pytest test_json_parsing.py -v
+python3 -m pytest test_kelly.py -v
+python3 -m pytest test_signal_filter.py -v
+python3 -m pytest test_validate_setup.py -v
+python3 -m pytest test_cache_contracts.py -v
+python3 -m pytest test_docs_consistency.py -v
 
 # Run with output capture (shows print statements)
-pytest . -v -s
+python3 -m pytest . -v -s
 ```
 
 ## Test Modules
@@ -177,6 +181,38 @@ markets         | Total:  30 | Passed:  12 ( 40.0%) | Blocked:  18
 
 ---
 
+### 5. test_validate_setup.py (6 tests)
+**Tests setup validation helpers without making live network calls**
+
+Validates the public setup validator's fast-fail behavior and mocked success paths:
+- Kalshi validation fails clearly when credentials are incomplete
+- Anthropic validation handles missing keys and successful mocked responses
+- Ollama validation reports missing models and successful mocked inference
+
+---
+
+### 6. test_cache_contracts.py (6 tests)
+**Tests Morning Brief cache compatibility with the runtime skills**
+
+Validates the public cache contract and rendering behavior:
+- Freshness checks support both ISO `cached_at` and unix `timestamp`
+- Kalshalyst bullish edges render as `YES`
+- Arbiter rendering accepts both normalized and legacy cache schemas
+- Default Morning Brief cache paths match emitted runtime files
+
+---
+
+### 7. test_docs_consistency.py (4 tests)
+**Tests high-signal public documentation invariants**
+
+Guards the repo against the exact drift that previously existed:
+- Primary docs stay on the 10-skill stack language
+- Public examples use `qwen3:latest` as the default local model
+- Cost language no longer claims a zero-cost public reference path
+- `OPERATIONS.md` points to the real cache files and regression gate
+
+---
+
 ## File Structure
 
 ```
@@ -185,9 +221,12 @@ tests/
 ├── pytest.ini                  # Pytest configuration
 ├── README.md                   # This file
 ├── test_blocklist.py           # 36 tests: market filtering
+├── test_cache_contracts.py     # 6 tests: cache/rendering contract
+├── test_docs_consistency.py    # 4 tests: public docs invariants
 ├── test_json_parsing.py        # 43 tests: JSON parsing utilities
 ├── test_kelly.py               # 38 tests: position sizing
-└── test_signal_filter.py       # 20 tests: backtest validation
+├── test_signal_filter.py       # 20 tests: backtest validation
+└── test_validate_setup.py      # 6 tests: setup validator behavior
 ```
 
 ---
@@ -197,48 +236,51 @@ tests/
 ### Run All Tests
 ```bash
 cd ~/skills/tests
-pytest . -v
+python3 -m pytest . -v
 ```
 
 ### Run Specific Test Class
 ```bash
-pytest test_blocklist.py::TestPriceThresholdBlocking -v
-pytest test_kelly.py::TestConfidenceImpact -v
+python3 -m pytest test_blocklist.py::TestPriceThresholdBlocking -v
+python3 -m pytest test_kelly.py::TestConfidenceImpact -v
 ```
 
 ### Run Specific Test
 ```bash
-pytest test_blocklist.py::TestCleanMarketsPass::test_fed_rate_decision_passes -v
+python3 -m pytest test_blocklist.py::TestCleanMarketsPass::test_fed_rate_decision_passes -v
 ```
 
 ### Run with Output Capture (print statements visible)
 ```bash
-pytest . -v -s
+python3 -m pytest . -v -s
 ```
 
 ### Run with Short Traceback
 ```bash
-pytest . -v --tb=short
+python3 -m pytest . -v --tb=short
 ```
 
 ### Generate Category Statistics
 ```bash
-pytest test_signal_filter.py::TestCategoryBreakdown::test_get_category_statistics -v -s
+python3 -m pytest test_signal_filter.py::TestCategoryBreakdown::test_get_category_statistics -v -s
 ```
 
 ---
 
 ## Test Results Summary
 
-**Total: 137 tests, 100% passing**
+**Total: 153 tests, 100% passing**
 
 | Module | Tests | Status |
 |--------|-------|--------|
 | test_blocklist.py | 36 | ✓ PASS |
+| test_cache_contracts.py | 6 | ✓ PASS |
+| test_docs_consistency.py | 4 | ✓ PASS |
 | test_json_parsing.py | 43 | ✓ PASS |
 | test_kelly.py | 38 | ✓ PASS |
 | test_signal_filter.py | 20 | ✓ PASS |
-| **TOTAL** | **137** | **✓ PASS** |
+| test_validate_setup.py | 6 | ✓ PASS |
+| **TOTAL** | **153** | **✓ PASS** |
 
 ---
 

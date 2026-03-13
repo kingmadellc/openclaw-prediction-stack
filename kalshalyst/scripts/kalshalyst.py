@@ -82,8 +82,66 @@ _MICRO_TIMEFRAME_PATTERNS = {
     "price down in next",
 }
 
+_POLITICS_NOISE_PATTERNS = {
+    "primary", "runoff", "special election", "city council",
+    "state senate", "state house", "state rep", "alderman",
+    "margin of victory", "vote share", "win by more than",
+    "win by less than", "percentage of vote",
+    "win between", "win above", "seats in the",
+    "leave office next", "leave office first",
+    "be 1st in the next", "be first in the next",
+    "next presidential election first round",
+    "dutch election", "czech election", "argentine election",
+    "brazilian election", "mexican election", "colombian election",
+    "peruvian election", "chilean election", "turkish election",
+    "south korean election", "japanese election", "indian election",
+    "australian election", "canadian election",
+    "romanian presidential", "japanese house",
+    "gorton and denton",
+}
 
-def _is_blocked(ticker: str, category: str = "", title: str = "") -> bool:
+_PRICE_THRESHOLD_RE = re.compile(
+    r"(price|close|drop|fall|rise|trade|open|hit|reach|touch|break|stay)"
+    r"\s+(above|below|over|under|at or above|at or below)"
+    r"\s+\$?[\d,]+",
+    re.IGNORECASE,
+)
+
+_PRICE_ASSET_RE = re.compile(
+    r"(bitcoin|btc|ethereum|eth|solana|sol|dogecoin|doge|xrp"
+    r"|s&p|s&p 500|nasdaq|dow jones|djia|russell|vix"
+    r"|gold|silver|oil|crude|wti|brent|natural gas"
+    r"|aapl|amzn|goog|googl|msft|nvda|tsla|meta)"
+    r"\s+.{0,20}(above|below|over|under|exceed|less than)\s+\$?[\d,]+",
+    re.IGNORECASE,
+)
+
+_COINFLIP_PATTERNS = {
+    "when will", "how many", "what will be the", "who will the next", "how much will",
+}
+
+_IPO_RE = re.compile(r"\bipo\b", re.IGNORECASE)
+
+
+def _is_noise_market(title: str, price_cents: int = 50) -> str:
+    """Return a noise reason for low-signal market prompts, else an empty string."""
+    title_lower = title.lower()
+
+    if _PRICE_THRESHOLD_RE.search(title):
+        return "price_threshold"
+    if _PRICE_ASSET_RE.search(title):
+        return "price_asset"
+    if any(pattern in title_lower for pattern in _POLITICS_NOISE_PATTERNS):
+        return "politics_noise"
+    if 40 <= price_cents <= 60:
+        if _IPO_RE.search(title):
+            return "coinflip_ipo"
+        if any(pattern in title_lower for pattern in _COINFLIP_PATTERNS):
+            return "coinflip_uncertain"
+    return ""
+
+
+def _is_blocked(ticker: str, category: str = "", title: str = "", price_cents: int = 50) -> bool:
     """Check if a market should be excluded from analysis."""
     ticker_upper = ticker.upper()
     if any(ticker_upper.startswith(prefix) for prefix in _BLOCKED_TICKER_PREFIXES):
@@ -92,6 +150,8 @@ def _is_blocked(ticker: str, category: str = "", title: str = "") -> bool:
         return True
     title_lower = title.lower()
     if any(pat in title_lower for pat in _MICRO_TIMEFRAME_PATTERNS):
+        return True
+    if _is_noise_market(title, price_cents=price_cents):
         return True
     return False
 
