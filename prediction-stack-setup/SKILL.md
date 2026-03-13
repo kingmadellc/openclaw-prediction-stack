@@ -66,12 +66,12 @@ openclaw skills list | grep -E "kalshalyst|kalshi-command|polymarket-command|pre
 | Portfolio Drift Monitor | Position monitoring | Drift alerts between briefs |
 | Market Morning Brief | Daily digest | Consolidated morning/evening intelligence |
 | Personality Engine | Agent behavior | Consistent voice across all output |
-| Prediction Stack Orchestrator | Pipeline manager | Validation and execution routing |
+| Prediction Stack Orchestrator | Premium/experimental pipeline manager | Validation and execution routing |
 | Prediction Stack Setup | Setup wizard | Validation, scheduling, delivery wiring |
 
 **Minimum viable stack:** Kalshalyst + Kalshi Command Center + Market Morning Brief. These three give you edge detection, execution, and daily digest. Everything else enriches the system.
 
-**Full stack:** All 10 skills. Morning Brief pulls from every cache and the orchestrator adds a premium automation path on top.
+**Full stack:** All 10 skills. Morning Brief pulls from every cache and the orchestrator adds a premium/experimental automation path on top.
 
 Install missing skills:
 ```bash

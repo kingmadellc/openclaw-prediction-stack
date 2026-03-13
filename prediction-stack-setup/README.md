@@ -5,6 +5,8 @@ Interactive setup wizard for the [OpenClaw Prediction Market Trading Stack](http
 <!-- CODEX: reconciled stack size and cost language with the public reference implementation. -->
 Turns the 10-skill stack into a connected, proactive trading system. Creates scheduled scans, enables iMessage delivery, configures API keys, and tests the full pipeline — in under 5 minutes.
 
+The runtime path is the eight core operational skills. `prediction-stack-orchestrator` is documented in the stack as a premium/experimental automation layer.
+
 ## Quick Start
 
 1. Install the stack skills you want (minimum: Kalshalyst + Kalshi Command Center + Market Morning Brief)

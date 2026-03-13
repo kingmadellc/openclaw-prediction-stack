@@ -29,7 +29,7 @@ The [setup wizard](prediction-stack-setup/) walks you through API keys, delivery
 | 6 | [**Portfolio Drift Monitor**](portfolio-drift-monitor/) | Position drift alerts — snapshot comparison fires when any Kalshi position moves beyond threshold since last check. Directional indicators, rate-limited. |
 | 7 | [**Market Morning Brief**](market-morning-brief/) | Daily intelligence digest — aggregates portfolio P&L, top edges, divergences, social signals, crypto prices, Polymarket trends into a 30-second scan. Morning + evening editions. |
 | 8 | [**Personality Engine**](personality-engine/) | Six-system behavior engine — editorial voice, selective silence, variable timing, micro-initiations, context buffer, response tracking. Domain-agnostic with default trading config. |
-| 9 | [**Prediction Stack Orchestrator**](prediction-stack-orchestrator/) | Three-agent pipeline manager (Kalshalyst → Eval → Executor) for automated trading with validation loops, retry logic, and veto power. Routes markets through estimation and validates before execution. |
+| 9 | [**Prediction Stack Orchestrator**](prediction-stack-orchestrator/) | Premium/experimental three-agent pipeline manager (Kalshalyst → Eval → Executor) for automated trading with validation loops, retry logic, and veto power. Routes markets through estimation and validates before execution. |
 | 10 | [**Prediction Stack Setup**](prediction-stack-setup/) | Setup wizard — detects installed skills, walks through API keys, creates cron jobs, enables heartbeat, tests iMessage delivery. Wires the 10-skill stack into one operating system. |
 
 ## How They Connect
