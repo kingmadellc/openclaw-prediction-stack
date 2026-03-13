@@ -31,6 +31,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _resolve_private_key_path(key_path: str) -> Path:
+    """Resolve Kalshi private key paths consistently with the skillchain."""
+    expanded = Path(key_path).expanduser()
+    if expanded.is_absolute():
+        return expanded
+    return Path.home() / ".openclaw" / "keys" / expanded
+
+
 class ValidationResult:
     """Encapsulates validation result for a service."""
     # CODEX: default passed=False so validators can progressively fill the result.
@@ -96,8 +104,7 @@ def validate_kalshi(config: dict, verbose: bool = False) -> ValidationResult:
             result.duration_ms = int((time.time() - start) * 1000)
             return result
 
-        # Expand ~ in path
-        key_path = Path(key_path).expanduser()
+        key_path = _resolve_private_key_path(key_path)
 
         if not key_path.exists():
             result.error = f"Private key file not found: {key_path}"

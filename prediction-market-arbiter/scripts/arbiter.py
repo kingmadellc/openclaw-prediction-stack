@@ -73,17 +73,44 @@ DEFAULT_CONFIG = {
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """Load configuration from YAML file or use defaults."""
-    if config_path and Path(config_path).exists():
-        if yaml is None:
-            logging.warning("PyYAML not installed; using defaults")
-            return DEFAULT_CONFIG
-        with open(config_path) as f:
-            user_cfg = yaml.safe_load(f) or {}
-        # Merge with defaults
-        cfg = DEFAULT_CONFIG.copy()
-        cfg.update(user_cfg)
-        return cfg
-    return DEFAULT_CONFIG
+    candidate_paths = []
+    if config_path:
+        candidate_paths.append(Path(config_path).expanduser())
+    else:
+        candidate_paths.append(Path.home() / ".openclaw" / "config.yaml")
+
+    user_cfg = {}
+    for candidate in candidate_paths:
+        if candidate.exists():
+            if yaml is None:
+                logging.warning("PyYAML not installed; using defaults")
+                return DEFAULT_CONFIG
+            with open(candidate) as f:
+                user_cfg = yaml.safe_load(f) or {}
+            break
+
+    # Merge with defaults
+    cfg = {
+        **DEFAULT_CONFIG,
+        **user_cfg,
+        "kalshi": {
+            **DEFAULT_CONFIG["kalshi"],
+            **user_cfg.get("kalshi", {}),
+        },
+        "prediction_market_arbiter": {
+            **DEFAULT_CONFIG["prediction_market_arbiter"],
+            **user_cfg.get("prediction_market_arbiter", {}),
+        },
+    }
+
+    # Backward compatibility for older setup templates.
+    if "arbiter" in user_cfg and "prediction_market_arbiter" not in user_cfg:
+        cfg["prediction_market_arbiter"] = {
+            **DEFAULT_CONFIG["prediction_market_arbiter"],
+            **user_cfg.get("arbiter", {}),
+        }
+
+    return cfg
 
 
 # ============================================================================
@@ -450,14 +477,14 @@ def main():
     cfg = load_config(args.config)
 
     try:
-        result = check_cross_platform(
+        check_cross_platform(
             state={},
             cfg=cfg,
             dry_run=args.dry_run,
             force=args.force,
             logger=logger,
         )
-        sys.exit(0 if result else 1)
+        sys.exit(0)
     except KeyboardInterrupt:
         logger.info("Interrupted")
         sys.exit(130)

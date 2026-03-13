@@ -85,9 +85,9 @@ portfolio_drift:
   check_interval_minutes: 60
 
 # ═══════════════════════════════════════════════════════
-# ARBITER — Cross-platform divergence detection
+# PREDICTION MARKET ARBITER — Cross-platform divergence detection
 # ═══════════════════════════════════════════════════════
 
-arbiter:
-  min_divergence_pct: 10.0         # Minimum Kalshi vs Polymarket gap to alert
+prediction_market_arbiter:
+  divergence_threshold_pct: 10.0   # Minimum Kalshi vs Polymarket gap to alert
   min_volume: 100                  # Skip low-volume matches

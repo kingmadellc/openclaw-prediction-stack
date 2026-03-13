@@ -12,6 +12,7 @@ Falls back to local Qwen if Claude is unavailable (cooldown/offline).
 import json
 import time
 import logging
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,23 @@ You must respond with ONLY a JSON object, no other text:
 }"""
 
 
+def _load_system_prompt() -> str:
+    """Load system prompt — premium from ~/prompt-lab/prompt.md, else built-in free tier."""
+    premium_path = Path.home() / "prompt-lab" / "prompt.md"
+    if premium_path.exists():
+        try:
+            prompt = premium_path.read_text().strip()
+            if prompt:
+                logger.info("Loaded premium prompt from %s (%d chars)", premium_path, len(prompt))
+                return prompt
+        except Exception as e:
+            logger.warning("Failed to load premium prompt: %s", e)
+    return _SYSTEM_PROMPT
+
+
+_ACTIVE_PROMPT = _load_system_prompt()
+
+
 # ── Probability Estimation ──────────────────────────────────────────────
 
 def estimate_probability(
@@ -168,7 +186,7 @@ TIME TO RESOLUTION: {days_str}{price_str}
 
 Is the market mispricing this? Give your true probability estimate and explain why the market is wrong (or say confidence is low if you agree with the market). Respond with JSON only."""
 
-    result = _claude_estimate(prompt, _SYSTEM_PROMPT)
+    result = _claude_estimate(prompt, _ACTIVE_PROMPT)
     if not result:
         return None
 

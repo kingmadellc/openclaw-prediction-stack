@@ -13,9 +13,11 @@ Usage:
     python kelly_size.py [options]
 """
 
+import json
 import math
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,34 @@ MAX_CONTRACTS_PER_TRADE = 100
 MAX_COST_PER_TRADE_USD = 25.00
 MIN_CONTRACTS = 1
 CONFIDENCE_EXPONENT = 2.0
+
+
+def _load_kelly_config():
+    """Load Kelly parameters — premium from config file, else use built-in defaults."""
+    global DEFAULT_ALPHA, CONFIDENCE_EXPONENT, MIN_EDGE_FOR_SIZING
+    global MAX_CONTRACTS_PER_TRADE, MAX_COST_PER_TRADE_USD
+
+    for candidate in [
+        Path.home() / "kelly_config.json",
+        Path.home() / "prompt-lab" / "kelly_config.json",
+    ]:
+        if candidate.exists():
+            try:
+                with open(candidate) as f:
+                    cfg = json.load(f)
+                DEFAULT_ALPHA = cfg.get("alpha", cfg.get("kelly_fraction", DEFAULT_ALPHA))
+                CONFIDENCE_EXPONENT = cfg.get("confidence_exponent", cfg.get("conf_exp", CONFIDENCE_EXPONENT))
+                MIN_EDGE_FOR_SIZING = cfg.get("min_edge_for_sizing", cfg.get("min_edge", MIN_EDGE_FOR_SIZING))
+                MAX_CONTRACTS_PER_TRADE = cfg.get("max_contracts_per_trade", MAX_CONTRACTS_PER_TRADE)
+                MAX_COST_PER_TRADE_USD = cfg.get("max_cost_per_trade_usd", MAX_COST_PER_TRADE_USD)
+                logger.info("Loaded Kelly config from %s: alpha=%.2f, conf_exp=%.1f, min_edge=%.3f",
+                           candidate, DEFAULT_ALPHA, CONFIDENCE_EXPONENT, MIN_EDGE_FOR_SIZING)
+                return
+            except Exception as e:
+                logger.warning("Failed to load Kelly config from %s: %s", candidate, e)
+
+
+_load_kelly_config()
 
 
 @dataclass

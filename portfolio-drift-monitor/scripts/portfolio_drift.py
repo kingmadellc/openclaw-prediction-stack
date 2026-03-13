@@ -37,6 +37,19 @@ except ImportError:
     yaml = None
 
 
+# ── API Schema Normalization ────────────────────────────────────────────────
+def _normalize_position(p: dict) -> dict:
+    """Normalize Kalshi API v3 position fields.
+
+    Kalshi API may change position field names. This helper ensures we handle
+    both old and new field names gracefully. Currently a pass-through; if Kalshi
+    changes position schema, update this function to normalize field names.
+    """
+    # Currently positions use position_fp, average_price, realized_pnl which are stable.
+    # If Kalshi renames these, add normalization logic here.
+    return p
+
+
 class PortfolioDriftMonitor:
     """Monitors Kalshi portfolio drift with rate limiting and threshold alerts."""
 
@@ -138,6 +151,7 @@ class PortfolioDriftMonitor:
             positions = {}
             for pos in raw_positions:
                 if isinstance(pos, dict):
+                    pos = _normalize_position(pos)
                     ticker = pos.get("ticker", pos.get("market_ticker", "unknown"))
                     side = pos.get("side", "unknown")
                     # v3 API: position_fp (float), v2: position (int), fallback: total_traded/shares

@@ -32,6 +32,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ── API Schema Normalization ────────────────────────────────────────────────
+def _normalize_market(m: dict) -> dict:
+    """Normalize Kalshi API v3 dollar-string fields to integer cents.
+
+    Kalshi API changed field names (e.g., yes_bid → yes_bid_dollars).
+    This helper converts new dollar-string fields to integer cents the rest
+    of the code expects. Only normalizes if new fields are present and old ones
+    are missing (safe to call on already-normalized dicts).
+    """
+    def _dollars_to_cents(val):
+        """Convert dollar string like '0.4500' to integer cents like 45."""
+        if val is None:
+            return 0
+        if isinstance(val, (int, float)):
+            return int(val) if val < 10 else int(val)  # already cents or needs conversion
+        try:
+            return int(round(float(val) * 100))
+        except (ValueError, TypeError):
+            return 0
+
+    def _fp_to_int(val):
+        """Convert float-point string like '1234.00' to integer."""
+        if val is None:
+            return 0
+        if isinstance(val, int):
+            return val
+        try:
+            return int(round(float(val)))
+        except (ValueError, TypeError):
+            return 0
+
+    # Only normalize if new fields are present and old ones are missing
+    if m.get("yes_bid") is None and "yes_bid_dollars" in m:
+        m["yes_bid"] = _dollars_to_cents(m.get("yes_bid_dollars"))
+        m["yes_ask"] = _dollars_to_cents(m.get("yes_ask_dollars"))
+        m["no_bid"] = _dollars_to_cents(m.get("no_bid_dollars"))
+        m["no_ask"] = _dollars_to_cents(m.get("no_ask_dollars"))
+        m["last_price"] = _dollars_to_cents(m.get("last_price_dollars"))
+        m["yes_price"] = m.get("yes_price") or _dollars_to_cents(m.get("yes_bid_dollars"))  # approximate
+        m["previous_yes_bid"] = _dollars_to_cents(m.get("previous_yes_bid_dollars"))
+        m["previous_yes_ask"] = _dollars_to_cents(m.get("previous_yes_ask_dollars"))
+        m["previous_price"] = _dollars_to_cents(m.get("previous_price_dollars"))
+        m["volume"] = _fp_to_int(m.get("volume_fp"))
+        m["volume_24h"] = _fp_to_int(m.get("volume_24h_fp"))
+        m["open_interest"] = _fp_to_int(m.get("open_interest_fp"))
+        m["liquidity"] = _dollars_to_cents(m.get("liquidity_dollars"))
+        m["notional_value"] = _dollars_to_cents(m.get("notional_value_dollars"))
+    return m
+
+
 # ── Category Filtering ──────────────────────────────────────────────────────
 
 _ALLOWED_CATEGORIES = {
@@ -223,7 +273,7 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
             resp = client.call_api("GET", url)
             data = json.loads(resp.read())
 
-            markets = data.get("markets", [])
+            markets = [_normalize_market(m) for m in data.get("markets", [])]
             all_markets.extend(markets)
             cursor = data.get("cursor")
 
