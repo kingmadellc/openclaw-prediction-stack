@@ -45,40 +45,21 @@ def _normalize_position(p: dict) -> dict:
     Kalshi API v3 returns event_positions with different field names than
     the market-level positions the parser expects. This maps event-level
     fields to the canonical names used downstream.
-
-    Event-level fields (v3):
-        event_ticker -> ticker
-        total_cost_shares_fp -> position_fp
-        event_exposure_dollars -> exposure (new, used for zero-position filtering)
-        realized_pnl_dollars -> realized_pnl
-        total_cost_dollars -> total_cost
-        fees_paid_dollars -> fees_paid
     """
     normalized = dict(p)
-
-    # Map event_ticker -> ticker (if no market-level ticker present)
     if "ticker" not in normalized and "market_ticker" not in normalized:
         if "event_ticker" in normalized:
             normalized["ticker"] = normalized["event_ticker"]
-
-    # Map total_cost_shares_fp -> position_fp (total shares in the event)
     if "position_fp" not in normalized and "position" not in normalized:
         if "total_cost_shares_fp" in normalized:
             normalized["position_fp"] = normalized["total_cost_shares_fp"]
-
-    # Map realized_pnl_dollars -> realized_pnl
     if "realized_pnl" not in normalized and "pnl" not in normalized:
         if "realized_pnl_dollars" in normalized:
             normalized["realized_pnl"] = normalized["realized_pnl_dollars"]
-
-    # Map event_exposure_dollars -> exposure (used for filtering settled events)
     if "event_exposure_dollars" in normalized:
         normalized["exposure"] = normalized["event_exposure_dollars"]
-
-    # Map total_cost_dollars -> total_cost (useful for avg price estimation)
     if "total_cost_dollars" in normalized:
         normalized["total_cost"] = normalized["total_cost_dollars"]
-
     return normalized
 
 
@@ -195,36 +176,24 @@ class PortfolioDriftMonitor:
                 pos = _normalize_position(pos)
                 ticker = pos.get("ticker") or pos.get("market_ticker") or "unknown"
                 side = pos.get("side", "unknown")
-
-                # v3 API: position_fp (float string), v2: position (int)
                 _pos_val = pos.get("position_fp") or pos.get("position") or pos.get("total_traded") or pos.get("shares", 0)
                 try:
                     shares = float(_pos_val or 0)
                 except (ValueError, TypeError):
                     shares = 0.0
-
-                # For event-level positions, also check exposure — a position with
-                # shares > 0 but exposure == 0 is fully settled (historical trade)
                 try:
                     exposure = float(pos.get("exposure", -1) or -1)
                 except (ValueError, TypeError):
-                    exposure = -1  # Unknown exposure, don't filter on it
-
-                # Skip if both shares and exposure are zero (definitely settled)
+                    exposure = -1
                 if shares == 0.0 and exposure == 0.0:
                     continue
-                # Skip if shares is zero and no exposure data available
                 if shares == 0.0 and exposure < 0:
                     continue
-
                 avg_price = float(pos.get("average_price", pos.get("avg_price", 0)) or 0)
                 pnl = float(pos.get("realized_pnl", pos.get("pnl", 0)) or 0)
                 total_cost = float(pos.get("total_cost", 0) or 0)
-
-                # Estimate avg_price from total_cost / shares if not provided directly
                 if avg_price == 0.0 and shares > 0 and total_cost > 0:
                     avg_price = round(total_cost / shares, 4)
-
                 positions[ticker] = {
                     "side": side,
                     "shares": shares,
@@ -235,7 +204,6 @@ class PortfolioDriftMonitor:
                     "risk": 0.0,
                     "timestamp": datetime.utcnow().isoformat()
                 }
-
             return {
                 "timestamp": datetime.utcnow().isoformat(),
                 "positions": positions,
