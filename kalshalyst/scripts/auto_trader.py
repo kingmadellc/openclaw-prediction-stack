@@ -24,6 +24,8 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from trade_ledger import record_trade
+
 # ── Logging ───────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -518,6 +520,15 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
                 logger.info(f"EXECUTED: {side.upper()} {result.contracts}x {ticker} @ {exec_price}¢ "
                             f"(${result.cost_usd:.2f}, edge={effective_edge:.1f}%)")
                 logger.info(f"  Verification: {order_result.split(chr(10))[-1] if chr(10) in order_result else 'n/a'}")
+
+                # Write to local trade ledger (ground truth when API is broken)
+                record_trade(
+                    ticker=ticker, side=side, contracts=result.contracts,
+                    price_cents=exec_price, cost_usd=result.cost_usd,
+                    edge_pct=effective_edge, confidence=confidence,
+                    order_id="", title=title, dry_run=False,
+                )
+
                 executed_trades.append({
                     "ticker": ticker,
                     "side": side,

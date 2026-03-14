@@ -248,6 +248,86 @@ def _trade_audit(event: str, data: dict):
         logger.warning(f"Failed to write trade audit log: {e}")
 
 
+def _position_qty(position: dict) -> int:
+    """Parse signed quantity from a Kalshi position payload."""
+    value = position.get("position_fp") or position.get("position", 0)
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fetch_position_snapshot(client) -> dict:
+    """Return current signed position quantities keyed by ticker."""
+    resp = client._portfolio_api.get_positions_without_preload_content(limit=200)
+    data = json.loads(resp.read())
+    pos_list = (
+        data.get("event_positions")
+        or data.get("positions")
+        or data.get("market_positions")
+        or []
+    )
+    snapshot = {}
+    for position in pos_list:
+        ticker = position.get("ticker") or position.get("market_ticker")
+        if not ticker:
+            continue
+        snapshot[str(ticker)] = _position_qty(position)
+    return snapshot
+
+
+def _fetch_resting_orders(client, ticker: str = "") -> list[dict]:
+    """Fetch current resting orders, optionally filtered to one ticker."""
+    url = f"{BASE_URL}/portfolio/orders?status=resting"
+    orders_resp = json.loads(client.call_api("GET", url).read())
+    orders = orders_resp.get("orders", [])
+    if ticker:
+        return [order for order in orders if order.get("ticker") == ticker]
+    return orders
+
+
+def _reconcile_order(
+    client,
+    *,
+    action: str,
+    ticker: str,
+    side: str,
+    quantity: int,
+    order_id: str,
+    before_positions: dict,
+    status: str,
+) -> tuple[bool, str]:
+    """Verify that an order is resting or changed portfolio state as expected."""
+    delays = (0.0, 0.25, 0.75)
+    before_qty = before_positions.get(ticker, 0)
+
+    for delay in delays:
+        if delay:
+            time.sleep(delay)
+
+        resting_orders = _fetch_resting_orders(client, ticker=ticker)
+        if any(order.get("order_id") == order_id for order in resting_orders):
+            return True, "RECONCILED: resting order confirmed on Kalshi"
+
+        after_positions = _fetch_position_snapshot(client)
+        after_qty = after_positions.get(ticker, 0)
+
+        if action == "buy":
+            expected_delta = quantity if side == "yes" else -quantity
+            observed_delta = after_qty - before_qty
+            if expected_delta > 0 and observed_delta >= quantity:
+                return True, f"RECONCILED: YES position increased by {observed_delta}"
+            if expected_delta < 0 and observed_delta <= -quantity:
+                return True, f"RECONCILED: NO position increased by {abs(observed_delta)}"
+        else:
+            if abs(after_qty) <= max(0, abs(before_qty) - quantity):
+                return True, f"RECONCILED: position size moved from {before_qty} to {after_qty}"
+
+    if status == "executed":
+        return False, "I don't know if the fill stuck — Kalshi said executed but the position delta never appeared"
+    return False, "I don't know if the order is resting or filled — it never showed up in orders or positions"
+
+
 def _check_risk(cost: float, quantity: int):
     """Check trade against risk limits. Returns error string or None if OK."""
     if cost > MAX_SINGLE_TRADE_COST:
@@ -323,22 +403,44 @@ def portfolio_command(args: str = "") -> str:
 
         # v3 API returns event_positions, v2 returns market_positions, SDK uses positions
         all_positions = raw_data.get("event_positions") or raw_data.get("positions") or raw_data.get("market_positions", [])
-        # v3 uses position_fp (float), v2 uses position (int) for quantity
-        def _get_qty(p):
-            v = p.get("position_fp") or p.get("position", 0)
-            try:
-                return int(float(v))
-            except (ValueError, TypeError):
-                return 0
-        positions = [p for p in all_positions if _get_qty(p) != 0]
+        positions = [p for p in all_positions if _position_qty(p) != 0]
+
+        # ── Circuit breaker: check API data against last known state ──────
+        try:
+            from circuit_breaker import check_portfolio
+            api_pos_dict = {p.get("ticker", "?"): p for p in positions}
+            cb_state = check_portfolio(api_pos_dict, cash, len(positions))
+            if cb_state.is_tripped:
+                # API data looks wrong — warn the user, show what we know
+                from trade_ledger import get_summary as ledger_summary
+                ls = ledger_summary()
+                warning_lines = [
+                    f"⚠️ CIRCUIT BREAKER TRIPPED: {cb_state.trip_reason}",
+                    f"",
+                    f"API is returning suspicious data. Showing last known state:",
+                    f"💵 Cash (last known): ${cb_state.last_known_balance:.2f}",
+                    f"📋 Ledger shows {ls['open_positions']} open positions, ${ls['total_deployed_usd']:.2f} deployed:",
+                ]
+                for ticker, pos in ls["positions"].items():
+                    warning_lines.append(
+                        f"  • {pos.get('title', ticker)}: {pos['contracts']}x {pos['side'].upper()} "
+                        f"@ {pos['price_cents']}¢ (${pos['cost_usd']:.2f})"
+                    )
+                warning_lines.append("")
+                warning_lines.append("⚠️ These numbers are from the local trade ledger, NOT live API data.")
+                warning_lines.append("Manual positions (placed in the app) will NOT appear here.")
+                return "\n".join(warning_lines)
+        except ImportError:
+            pass  # circuit_breaker not available — continue without it
 
         total_cost = 0.0
         total_val = 0.0
+        unknown_valuations = 0
         pos_data = []
 
         for p in positions:
             ticker = p.get("ticker", "?")
-            qty = _get_qty(p)
+            qty = _position_qty(p)
             side = "YES" if qty >= 0 else "NO"
             abs_qty = abs(qty)
             cost = float(p.get("market_exposure_dollars", 0))
@@ -346,8 +448,10 @@ def portfolio_command(args: str = "") -> str:
 
             try:
                 url = f"{BASE_URL}/markets/{ticker}"
-                mkt = json.loads(client.call_api("GET", url).read()).get("market", {})
+                mkt = _normalize_market(json.loads(client.call_api("GET", url).read()).get("market", {}))
                 bid = mkt.get("yes_bid" if side == "YES" else "no_bid", 0)
+                if not bid:
+                    raise ValueError("missing live bid")
                 cur_val = abs_qty * bid / 100.0
                 pnl = cur_val - cost
                 pct = (pnl / cost * 100) if cost else 0
@@ -358,24 +462,36 @@ def portfolio_command(args: str = "") -> str:
                     "cost": cost, "val": cur_val, "pnl": pnl, "pct": pct,
                 })
             except (KeyError, TypeError, ValueError):
+                unknown_valuations += 1
                 name = TICKER_NAMES.get(ticker, ticker)
                 pos_data.append({
                     "name": name, "ticker": ticker, "qty": abs_qty, "side": side,
-                    "cost": cost, "val": 0, "pnl": 0, "pct": 0,
+                    "cost": cost, "val": None, "pnl": None, "pct": None,
                 })
 
         # Sort by absolute P&L (biggest movers first)
-        pos_data.sort(key=lambda x: abs(x["pnl"]), reverse=True)
+        pos_data.sort(
+            key=lambda x: abs(x["pnl"]) if isinstance(x.get("pnl"), (int, float)) else -1,
+            reverse=True,
+        )
 
-        total_pnl = total_val - total_cost
-        trend = "📈" if total_pnl >= 0 else "📉"
-
-        lines = [f"{trend} P&L: ${total_pnl:+.2f} across {len(positions)} positions"]
-        lines.append(f"💵 Cash: ${cash:.2f}  ·  Deployed: ${total_cost:.2f}  ·  Value: ${total_val:.2f}")
+        lines = []
+        if unknown_valuations:
+            lines.append(
+                f"❓ I don't know current total P&L because {unknown_valuations} position(s) could not be priced live."
+            )
+            lines.append(f"💵 Cash: ${cash:.2f}  ·  Deployed: ${total_cost:.2f}  ·  Live value: unknown")
+        else:
+            total_pnl = total_val - total_cost
+            trend = "📈" if total_pnl >= 0 else "📉"
+            lines.append(f"{trend} P&L: ${total_pnl:+.2f} across {len(positions)} positions")
+            lines.append(f"💵 Cash: ${cash:.2f}  ·  Deployed: ${total_cost:.2f}  ·  Value: ${total_val:.2f}")
         lines.append("")
 
         for p in pos_data:
-            if p["pct"] >= 20:
+            if p["pct"] is None:
+                icon = "❓"
+            elif p["pct"] >= 20:
                 icon = "🔥"
             elif p["pct"] >= 5:
                 icon = "✅"
@@ -385,12 +501,21 @@ def portfolio_command(args: str = "") -> str:
                 icon = "🔻"
             else:
                 icon = "➖"
-            lines.append(f"{icon} {p['name']}: {p['qty']}x {p['side']} @ ${p['cost']:.2f} → ${p['val']:.2f} ({p['pct']:+.0f}%)")
+            if p["pct"] is None:
+                lines.append(
+                    f"{icon} {p['name']}: {p['qty']}x {p['side']} @ ${p['cost']:.2f} → "
+                    f"I don't know current value"
+                )
+            else:
+                lines.append(
+                    f"{icon} {p['name']}: {p['qty']}x {p['side']} @ ${p['cost']:.2f} "
+                    f"→ ${p['val']:.2f} ({p['pct']:+.0f}%)"
+                )
 
         return "\n".join(lines)
 
     except Exception as e:
-        return f"Failed to fetch portfolio: {e}"
+        return f"❓ I don't know your live portfolio right now: {e}"
 
 
 def positions_command(args: str = "") -> str:
@@ -815,6 +940,7 @@ def _place_order(
         client = _get_client()
         if not client:
             return f"❌ {_classify_kalshi_error(_last_client_error)}"
+        before_positions = _fetch_position_snapshot(client)
 
         try:
             from kalshi_python_sync.models.create_order_request import CreateOrderRequest
@@ -873,39 +999,29 @@ def _place_order(
             "ticker": ticker, "order_id": order_id, "status": status or "unknown",
         })
 
-        # ── Post-placement verification ────────────────────────────────
-        verified = False
-        verify_msg = ""
         try:
-            orders_url = f"{BASE_URL}/portfolio/orders?status=resting"
-            orders_resp = json.loads(client.call_api("GET", orders_url).read())
-            resting = orders_resp.get("orders", [])
-            found_resting = any(o.get("order_id") == order_id for o in resting)
-
-            positions_url = f"{BASE_URL}/portfolio/positions"
-            pos_resp = json.loads(client.call_api("GET", positions_url).read())
-            pos_list = pos_resp.get("event_positions") or pos_resp.get("positions") or pos_resp.get("market_positions", [])
-            found_position = any(
-                p.get("ticker") == ticker or p.get("market_ticker") == ticker
-                for p in pos_list
+            verified, verify_msg = _reconcile_order(
+                client,
+                action=action,
+                ticker=ticker,
+                side=side,
+                quantity=quantity,
+                order_id=order_id,
+                before_positions=before_positions,
+                status=status or "",
             )
-
-            if found_resting:
-                verified = True
-                verify_msg = "VERIFIED: resting on Kalshi"
-            elif found_position:
-                verified = True
-                verify_msg = "VERIFIED: filled immediately"
-            elif status == "executed":
-                verified = True
-                verify_msg = "VERIFIED: status=executed"
-            else:
-                verify_msg = "UNVERIFIED — check Kalshi directly"
-                _trade_audit(f"{action}_unverified", {
-                    "ticker": ticker, "order_id": order_id, "status": status,
-                })
         except Exception as ve:
-            verify_msg = f"verification failed: {ve}"
+            verified = False
+            verify_msg = f"I don't know if the order stuck — reconciliation failed: {ve}"
+
+        if not verified:
+            _trade_audit(f"{action}_unverified", {
+                "ticker": ticker,
+                "order_id": order_id,
+                "status": status,
+                "verification": verify_msg[:200],
+            })
+            return f"❓ Order submitted for {ticker}, but {verify_msg}"
 
         name = TICKER_NAMES.get(ticker, ticker)
         fill_msg = "Filled" if status == "executed" else "Resting" if status == "resting" else (status or "unknown").capitalize()
