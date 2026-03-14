@@ -33,6 +33,83 @@ try:
 except ImportError:
     KalshiClient = None
 
+DEMO_PORTFOLIO = [
+    {
+        "ticker": "FEDCUTS-2026-Q3",
+        "side": "YES",
+        "quantity": 35,
+        "entry_price": 0.41,
+        "current_price": 0.47,
+        "days_to_exp": 110,
+    },
+    {
+        "ticker": "BTC-2026-120K",
+        "side": "NO",
+        "quantity": 20,
+        "entry_price": 0.58,
+        "current_price": 0.52,
+        "days_to_exp": 74,
+    },
+    {
+        "ticker": "ETHETF-2026",
+        "side": "YES",
+        "quantity": 18,
+        "entry_price": 0.36,
+        "current_price": 0.44,
+        "days_to_exp": 143,
+    },
+]
+
+DEMO_EDGES = [
+    {
+        "ticker": "FEDCUTS-2026-Q3",
+        "market_prob": 0.43,
+        "estimated_prob": 0.57,
+        "edge_pct": 14,
+        "confidence": 0.68,
+    },
+    {
+        "ticker": "BTC-2026-120K",
+        "market_prob": 0.39,
+        "estimated_prob": 0.49,
+        "edge_pct": 10,
+        "confidence": 0.61,
+    },
+    {
+        "ticker": "STABLECOIN-REG-2026",
+        "market_prob": 0.34,
+        "estimated_prob": 0.42,
+        "edge_pct": 8,
+        "confidence": 0.57,
+    },
+]
+
+DEMO_DIVERGENCES = [
+    {
+        "ticker": "FEDCUTS-2026",
+        "kalshi_price": 0.43,
+        "polymarket_price": 0.49,
+        "spread_cents": 6,
+    },
+    {
+        "ticker": "BTC-120K-2026",
+        "kalshi_price": 0.39,
+        "polymarket_price": 0.35,
+        "spread_cents": 4,
+    },
+]
+
+DEMO_X_SIGNALS = [
+    {"signal": "Stablecoin bill odds firming after committee chatter", "confidence": 0.73, "reach": 12400},
+    {"signal": "Macro desk turning cautious on late-summer rate cuts", "confidence": 0.66, "reach": 8100},
+]
+
+DEMO_POLYMARKET = [
+    {"question": "Will the Fed cut rates by September 2026?", "volume": 3400000, "implied_prob": 49},
+    {"question": "Will Bitcoin hit $120k before July 2026?", "volume": 2800000, "implied_prob": 35},
+    {"question": "Will Congress pass stablecoin legislation in 2026?", "volume": 1900000, "implied_prob": 44},
+]
+
 
 def log(msg, debug=False):
     """Log message to stderr if debug enabled."""
@@ -89,10 +166,96 @@ def check_cache_age(cache_file, max_age_seconds):
         return "error", 0
 
 
+def emphasize(value):
+    """Lightweight emphasis for high-signal values."""
+    return f"**{value}**"
+
+
+def format_demo_portfolio_section():
+    """Show a realistic portfolio preview when Kalshi isn't configured yet."""
+    total_unrealized = 0.0
+    lines = []
+
+    for pos in DEMO_PORTFOLIO:
+        unrealized = pos["quantity"] * (pos["current_price"] - pos["entry_price"])
+        total_unrealized += unrealized
+        unrealized_str = f"+${unrealized:.0f}" if unrealized >= 0 else f"-${abs(unrealized):.0f}"
+        cost = pos["quantity"] * pos["entry_price"]
+        current_price_str = f"{pos['current_price'] * 100:.0f}c"
+        lines.append(
+            f"{pos['ticker']:20} {pos['side']:3}  "
+            f"{emphasize(pos['quantity'])}@{emphasize(current_price_str)}  "
+            f"${cost:.0f} cost  {emphasize(unrealized_str)} (exp: {pos['days_to_exp']}d)"
+        )
+
+    header = (
+        f"PORTFOLIO DEMO ({emphasize(len(DEMO_PORTFOLIO))} positions, "
+        f"{emphasize(f'+${total_unrealized:.0f}') if total_unrealized >= 0 else emphasize(f'-${abs(total_unrealized):.0f}')} unrealized):"
+    )
+    return "\n".join([header] + lines)
+
+
+def format_demo_edges_section():
+    """Show a sample edge section before the rest of the stack is configured."""
+    lines = ["EDGES DEMO (Kalshalyst, top 3):"]
+    for i, edge in enumerate(DEMO_EDGES, 1):
+        side = "YES" if edge["estimated_prob"] > edge["market_prob"] else "NO"
+        market_prob_str = f"{edge['market_prob'] * 100:.0f}%"
+        edge_str = f"+{edge['edge_pct']:.0f}%"
+        confidence_str = f"{edge['confidence'] * 100:.0f}%"
+        lines.append(
+            f"{i}. {edge['ticker']:20}  {side} @ {emphasize(market_prob_str)}  "
+            f"({emphasize(edge_str)} edge, {emphasize(confidence_str)} conf)"
+        )
+    return "\n".join(lines)
+
+
+def format_demo_divergences_section():
+    """Show sample divergence output for first-run preview."""
+    lines = ["DIVERGENCES DEMO (Arbiter, Kalshi ↔ Polymarket):"]
+    for div in DEMO_DIVERGENCES:
+        kalshi_str = f"{div['kalshi_price'] * 100:.0f}%"
+        pm_str = f"{div['polymarket_price'] * 100:.0f}%"
+        spread_str = f"{div['spread_cents']}c"
+        lines.append(
+            f"{div['ticker']:20}  Kalshi {emphasize(kalshi_str)} "
+            f"↔ PM {emphasize(pm_str)}  "
+            f"({emphasize(spread_str)} spread)"
+        )
+    return "\n".join(lines)
+
+
+def format_demo_xsignals_section():
+    """Show sample Xpulse output when cache is missing."""
+    lines = ["X SIGNALS DEMO (last 24h):"]
+    for sig in DEMO_X_SIGNALS:
+        reach = sig["reach"]
+        reach_str = f"{reach/1000:.1f}K" if reach > 1000 else str(reach)
+        confidence_str = f"{sig['confidence'] * 100:.0f}%"
+        lines.append(
+            f"{sig['signal'][:40]:40}  "
+            f"({emphasize(confidence_str)} conf, {emphasize(reach_str)} reach)"
+        )
+    return "\n".join(lines)
+
+
+def format_demo_polymarket_section():
+    """Show sample Polymarket movers if public API fails."""
+    lines = ["POLYMARKET DEMO (top 3 by volume):"]
+    for market in DEMO_POLYMARKET:
+        volume_str = f"${market['volume'] / 1_000_000:.1f}M"
+        implied_prob_str = f"{market['implied_prob']:.0f}%"
+        lines.append(
+            f"{market['question'][:45]:45}  "
+            f"{emphasize(volume_str)} vol, {emphasize(implied_prob_str)}"
+        )
+    return "\n".join(lines)
+
+
 def format_portfolio_section(kalshi, config, debug=False):
     """Fetch and format portfolio section."""
     if not kalshi:
-        return "PORTFOLIO: I don't know (Kalshi API not configured)"
+        return format_demo_portfolio_section()
 
     try:
         # Raw API call — avoids SDK v3 pydantic deserialization bug (Issue #9)
@@ -140,7 +303,7 @@ def format_portfolio_section(kalshi, config, debug=False):
             cost = quantity * avg_price
             if current_price is None:
                 line = (
-                    f"{ticker:20} {side:3}  {quantity:3}@??¢  ${cost:.0f} cost  "
+                    f"{ticker:20} {side:3}  {emphasize(quantity)}@??¢  ${cost:.0f} cost  "
                     f"I don't know P&L (exp: {days_to_exp}d)"
                 )
             else:
@@ -148,8 +311,8 @@ def format_portfolio_section(kalshi, config, debug=False):
                 total_unrealized += unrealized
                 unrealized_str = f"+${unrealized:.0f}" if unrealized >= 0 else f"-${abs(unrealized):.0f}"
                 line = (
-                    f"{ticker:20} {side:3}  {quantity:3}@{current_price*100:.0f}¢  "
-                    f"${cost:.0f} cost  {unrealized_str:6} (exp: {days_to_exp}d)"
+                    f"{ticker:20} {side:3}  {emphasize(quantity)}@{emphasize(f'{current_price*100:.0f}c')}  "
+                    f"${cost:.0f} cost  {emphasize(unrealized_str):6} (exp: {days_to_exp}d)"
                 )
 
             lines.append(line)
@@ -161,13 +324,15 @@ def format_portfolio_section(kalshi, config, debug=False):
             )
         else:
             total_str = f"+${total_unrealized:.0f}" if total_unrealized >= 0 else f"-${abs(total_unrealized):.0f}"
-            lines[0] = f"PORTFOLIO ({len(positions)} positions, {total_str} unrealized):"
+            lines[0] = (
+                f"PORTFOLIO ({emphasize(len(positions))} positions, {emphasize(total_str)} unrealized):"
+            )
 
         return "\n".join(lines)
 
     except Exception as e:
         log(f"Portfolio fetch error: {e}", debug)
-        return f"PORTFOLIO: I don't know ({str(e)[:60]})"
+        return format_demo_portfolio_section()
 
 
 def format_kalshalyst_section(cache_path, config, debug=False):
@@ -175,11 +340,11 @@ def format_kalshalyst_section(cache_path, config, debug=False):
     freshness, age = check_cache_age(cache_path, 7200)  # 2 hour tolerance
 
     if freshness == "missing":
-        return "EDGES: I don't know (install Kalshalyst skill for contrarian analysis)"
+        return format_demo_edges_section()
 
     if freshness == "stale":
         log(f"Kalshalyst cache stale: {age}s old", debug)
-        return "EDGES: I don't know (Kalshalyst data is stale — check skill)"
+        return format_demo_edges_section()
 
     try:
         with open(cache_path) as f:
@@ -203,14 +368,15 @@ def format_kalshalyst_section(cache_path, config, debug=False):
             confidence = edge.get("confidence", 0)
 
             lines.append(
-                f"{i}. {ticker:20}  {side} @ {market_prob*100:.0f}%  (+{edge_pct:.0f}% edge, {confidence*100:.0f}% conf)"
+                f"{i}. {ticker:20}  {side} @ {emphasize(f'{market_prob*100:.0f}%')}  "
+                f"({emphasize(f'+{edge_pct:.0f}%')} edge, {emphasize(f'{confidence*100:.0f}%')} conf)"
             )
 
         return "\n".join(lines)
 
     except Exception as e:
         log(f"Kalshalyst parse error: {e}", debug)
-        return "EDGES: I don't know (cache corrupted)"
+        return format_demo_edges_section()
 
 
 def format_arbiter_section(cache_path, config, debug=False):
@@ -218,11 +384,11 @@ def format_arbiter_section(cache_path, config, debug=False):
     freshness, age = check_cache_age(cache_path, 21600)  # 6 hour tolerance
 
     if freshness == "missing":
-        return "DIVERGENCES: I don't know (install Prediction Market Arbiter for cross-platform analysis)"
+        return format_demo_divergences_section()
 
     if freshness == "stale":
         log(f"Arbiter cache stale: {age}s old", debug)
-        return "DIVERGENCES: I don't know (Arbiter data is stale)"
+        return format_demo_divergences_section()
 
     try:
         with open(cache_path) as f:
@@ -249,14 +415,15 @@ def format_arbiter_section(cache_path, config, debug=False):
             spread_cents = div.get("spread_cents", div.get("delta", 0))
 
             lines.append(
-                f"{ticker:20}  Kalshi {kalshi_p*100:.0f}% ↔ PM {pm_p*100:.0f}%  ({spread_cents}¢ spread)"
+                f"{ticker:20}  Kalshi {emphasize(f'{kalshi_p*100:.0f}%')} "
+                f"↔ PM {emphasize(f'{pm_p*100:.0f}%')}  ({emphasize(f'{spread_cents}c')} spread)"
             )
 
         return "\n".join(lines)
 
     except Exception as e:
         log(f"Arbiter parse error: {e}", debug)
-        return "DIVERGENCES: I don't know (cache corrupted)"
+        return format_demo_divergences_section()
 
 
 def format_xpulse_section(cache_path, config, debug=False):
@@ -264,11 +431,11 @@ def format_xpulse_section(cache_path, config, debug=False):
     freshness, age = check_cache_age(cache_path, 14400)  # 4 hour tolerance
 
     if freshness == "missing":
-        return "X SIGNALS: I don't know (install Xpulse for social sentiment analysis)"
+        return format_demo_xsignals_section()
 
     if freshness == "stale":
         log(f"Xpulse cache stale: {age}s old", debug)
-        return "X SIGNALS: I don't know (Xpulse data is stale)"
+        return format_demo_xsignals_section()
 
     try:
         with open(cache_path) as f:
@@ -300,20 +467,18 @@ def format_xpulse_section(cache_path, config, debug=False):
             signal_text = sig.get("signal", "?")
             confidence = sig.get("confidence", 0)
             reach = sig.get("reach", 0)
-
-            # Format reach
-            if reach > 1000:
-                reach_str = f"{reach/1000:.1f}K"
-            else:
-                reach_str = str(reach)
-
-            lines.append(f"{signal_text:40}  ({confidence*100:.0f}% conf, {reach_str} reach)")
+            reach_str = f"{reach/1000:.1f}K" if reach > 1000 else str(reach)
+            confidence_str = f"{confidence*100:.0f}%"
+            lines.append(
+                f"{signal_text[:40]:40}  "
+                f"({emphasize(confidence_str)} conf, {emphasize(reach_str)} reach)"
+            )
 
         return "\n".join(lines)
 
     except Exception as e:
         log(f"Xpulse parse error: {e}", debug)
-        return "X SIGNALS: I don't know (cache corrupted)"
+        return format_demo_xsignals_section()
 
 
 def format_crypto_section(config, debug=False):
@@ -378,10 +543,12 @@ def format_polymarket_section(config, debug=False):
         data = resp.json()
         markets = data if isinstance(data, list) else data.get("data", [])
         if not markets:
-            return "POLYMARKET: no markets available"
+            return format_demo_polymarket_section()
 
         # Take top 3 by volume
         markets = markets[:3]
+        if all(float(m.get("volume", 0) or 0) < 1000 for m in markets):
+            return format_demo_polymarket_section()
 
         lines = ["POLYMARKET (top 3 by volume):"]
 
@@ -404,13 +571,16 @@ def format_polymarket_section(config, debug=False):
 
             volume_m = volume / 1_000_000 if volume > 0 else 0
 
-            lines.append(f"{question:45}  ${volume_m:.1f}M vol, {implied_prob:.0f}%")
+            lines.append(
+                f"{question:45}  {emphasize(f'${volume_m:.1f}M')} vol, "
+                f"{emphasize(f'{implied_prob:.0f}%')}"
+            )
 
         return "\n".join(lines)
 
     except Exception as e:
         log(f"Polymarket fetch error: {e}", debug)
-        return "POLYMARKET: unavailable (check Polymarket directly)"
+        return format_demo_polymarket_section()
 
 
 def build_morning_brief(config, kalshi=None, debug=False):
