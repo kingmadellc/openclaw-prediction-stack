@@ -107,8 +107,12 @@ _BLOCKED_CATEGORIES_API = {
 # "NBA Finals" or "Stanley Cup Finals".
 _SPORTS_WORDS = {
     "nfl", "nba", "mlb", "nhl", "mls", "ncaa", "pga", "ufc", "wwe",
+    "wnba", "lpga", "nascar", "f1", "mma",
     "playoff", "playoffs", "heisman",
     "valorant", "atp", "wta", "itf",
+    "baseball", "basketball", "football", "hockey", "soccer",
+    "tennis", "cricket", "rugby", "boxing", "wrestling",
+    "esports", "motorsport",
 }
 
 _SPORTS_PHRASES = {
@@ -118,12 +122,21 @@ _SPORTS_PHRASES = {
     "bundesliga", "ligue 1", "champions league", "europa league",
     "league of legends", "copa america", "copa del rey",
     "challenger tour", "challenger round",
+    "world baseball classic", "indian wells", "grand prix",
+    "world cup", "gold cup", "nations league",
+    "college baseball", "college basketball", "college football",
+    "wins by over", "total runs", "total goals", "total points",
+    "first to score", "1+ goals", "2+ goals",
+    "moneyline", "spread", "over under",
 }
 
 # Ticker prefixes that are always sports — hard block
 _SPORTS_TICKER_PREFIXES = {
     "KXATP", "KXNFL", "KXNBA", "KXMLB", "KXNHL", "KXMLS",
     "KXNCAA", "KXPGA", "KXUFC", "KXWWE", "KXSOCCER", "KXTENNIS",
+    "KXWBC", "KXCBB", "KXCFB", "KXWNBA", "KXLPGA", "KXF1",
+    "KXNASCAR", "KXCRICKET", "KXRUGBY", "KXBOXING", "KXMMA",
+    "KXESPORT", "KXLOL", "KXDOTA", "KXCSK",
 }
 
 _MICRO_TIMEFRAME_PATTERNS = {
@@ -348,6 +361,7 @@ def fetch_kalshi_markets(client, cfg: dict) -> list[dict]:
         is_sports = _is_sports(ticker, title)
         if is_sports:
             stats["sports"] += 1
+            continue  # HARD BLOCK: never pass sports markets downstream
 
         days_to_close = _calc_days_to_close(m)
         if days_to_close is None or days_to_close < min_days or days_to_close > max_days:

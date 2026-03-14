@@ -394,6 +394,13 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
         side = "yes" if direction == "underpriced" else "no"
 
         # ── Skip checks ───────────────────────────────────────────
+        # Sports hard block (defense-in-depth — kalshalyst should filter upstream)
+        if edge.get("is_sports", False):
+            _log_state("edge_skipped", {"ticker": ticker, "reason": "sports_blocked"})
+            logger.info(f"  BLOCKED: sports market — skipping")
+            skipped += 1
+            continue
+
         # Edge threshold
         if effective_edge < min_edge:
             _log_state("edge_skipped", {"ticker": ticker, "reason": "below_threshold",

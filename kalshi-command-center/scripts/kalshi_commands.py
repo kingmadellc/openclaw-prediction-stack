@@ -307,9 +307,13 @@ def portfolio_command(args: str = "") -> str:
         resp = client._portfolio_api.get_positions_without_preload_content(limit=100)
         raw_data = json.loads(resp.read())
 
-        # Schema validation — fail loud if Kalshi changed field names again
+        # Handle empty portfolio (API returns {"cursor": "..."} with no position keys)
+        _EMPTY_ONLY_KEYS = {"cursor"}
         _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
-        if not any(k in raw_data for k in _KNOWN_POS_KEYS):
+        if set(raw_data.keys()) <= _EMPTY_ONLY_KEYS:
+            # Empty portfolio — not a schema drift, just no positions
+            pass  # fall through to normal processing with empty lists
+        elif not any(k in raw_data for k in _KNOWN_POS_KEYS):
             return (
                 f"❌ SCHEMA DRIFT: Kalshi API response has none of the expected position keys.\n"
                 f"Got keys: {sorted(raw_data.keys())}\n"
