@@ -91,31 +91,29 @@ def check_cache_age(cache_file, max_age_seconds):
 
 def format_portfolio_section(kalshi, config, debug=False):
     """Fetch and format portfolio section."""
-    section_lines = []
-
     if not kalshi:
-        return "PORTFOLIO: unavailable (Kalshi API not configured)"
+        return "PORTFOLIO: I don't know (Kalshi API not configured)"
 
     try:
-        # Use get_positions() (correct SDK method), not get_portfolio()
-        try:
-            resp = kalshi.get_positions(limit=100, settlement_status="unsettled")
-        except (TypeError, Exception):
-            resp = kalshi.get_positions()
+        # Raw API call — avoids SDK v3 pydantic deserialization bug (Issue #9)
+        resp = kalshi._portfolio_api.get_positions_without_preload_content(limit=100)
+        raw_data = json.loads(resp.read())
 
-        # Handle SDK v3 (.positions) and v2 (.market_positions)
-        if isinstance(resp, dict):
-            positions = resp.get("positions", resp.get("market_positions", []))
-        else:
-            positions = getattr(resp, "positions", None)
-            if positions is None:
-                positions = getattr(resp, "market_positions", [])
-            positions = positions or []
+        positions = (
+            raw_data.get("event_positions")
+            or raw_data.get("positions")
+            or raw_data.get("market_positions")
+            or []
+        )
+
+        # Filter to non-zero positions
+        positions = [p for p in positions if int(float(p.get("position_fp") or p.get("position", 0) or 0)) != 0]
 
         if not positions:
             return "PORTFOLIO: (no positions)"
 
         total_unrealized = 0.0
+        unknown_pricing = 0
         lines = [f"PORTFOLIO ({len(positions)} positions):"]
 
         for pos in positions:
@@ -136,25 +134,40 @@ def format_portfolio_section(kalshi, config, debug=False):
                     exp_dt = datetime.fromisoformat(exp_ts.replace("Z", "+00:00"))
                     days_to_exp = (exp_dt - datetime.now(timezone.utc)).days
             except Exception:
-                pass
+                unknown_pricing += 1
+                current_price = None
 
             cost = quantity * avg_price
-            unrealized = quantity * (current_price - avg_price)
-            total_unrealized += unrealized
-
-            unrealized_str = f"+${unrealized:.0f}" if unrealized >= 0 else f"-${abs(unrealized):.0f}"
-            line = f"{ticker:20} {side:3}  {quantity:3}@{current_price*100:.0f}¢  ${cost:.0f} cost  {unrealized_str:6} (exp: {days_to_exp}d)"
+            if current_price is None:
+                line = (
+                    f"{ticker:20} {side:3}  {quantity:3}@??¢  ${cost:.0f} cost  "
+                    f"I don't know P&L (exp: {days_to_exp}d)"
+                )
+            else:
+                unrealized = quantity * (current_price - avg_price)
+                total_unrealized += unrealized
+                unrealized_str = f"+${unrealized:.0f}" if unrealized >= 0 else f"-${abs(unrealized):.0f}"
+                line = (
+                    f"{ticker:20} {side:3}  {quantity:3}@{current_price*100:.0f}¢  "
+                    f"${cost:.0f} cost  {unrealized_str:6} (exp: {days_to_exp}d)"
+                )
 
             lines.append(line)
 
-        total_str = f"+${total_unrealized:.0f}" if total_unrealized >= 0 else f"-${abs(total_unrealized):.0f}"
-        lines[0] = f"PORTFOLIO ({len(positions)} positions, {total_str} unrealized):"
+        if unknown_pricing:
+            lines[0] = (
+                f"PORTFOLIO ({len(positions)} positions): I don't know total unrealized P&L "
+                f"because {unknown_pricing} market(s) could not be priced live."
+            )
+        else:
+            total_str = f"+${total_unrealized:.0f}" if total_unrealized >= 0 else f"-${abs(total_unrealized):.0f}"
+            lines[0] = f"PORTFOLIO ({len(positions)} positions, {total_str} unrealized):"
 
         return "\n".join(lines)
 
     except Exception as e:
         log(f"Portfolio fetch error: {e}", debug)
-        return f"PORTFOLIO: unavailable ({str(e)[:40]})"
+        return f"PORTFOLIO: I don't know ({str(e)[:60]})"
 
 
 def format_kalshalyst_section(cache_path, config, debug=False):
@@ -162,11 +175,11 @@ def format_kalshalyst_section(cache_path, config, debug=False):
     freshness, age = check_cache_age(cache_path, 7200)  # 2 hour tolerance
 
     if freshness == "missing":
-        return "EDGES: unavailable (install Kalshalyst skill for contrarian analysis)"
+        return "EDGES: I don't know (install Kalshalyst skill for contrarian analysis)"
 
     if freshness == "stale":
         log(f"Kalshalyst cache stale: {age}s old", debug)
-        return "EDGES: unavailable (Kalshalyst data stale — check skill)"
+        return "EDGES: I don't know (Kalshalyst data is stale — check skill)"
 
     try:
         with open(cache_path) as f:
@@ -197,7 +210,7 @@ def format_kalshalyst_section(cache_path, config, debug=False):
 
     except Exception as e:
         log(f"Kalshalyst parse error: {e}", debug)
-        return "EDGES: unavailable (cache corrupted)"
+        return "EDGES: I don't know (cache corrupted)"
 
 
 def format_arbiter_section(cache_path, config, debug=False):
@@ -205,11 +218,11 @@ def format_arbiter_section(cache_path, config, debug=False):
     freshness, age = check_cache_age(cache_path, 21600)  # 6 hour tolerance
 
     if freshness == "missing":
-        return "DIVERGENCES: unavailable (install Prediction Market Arbiter for cross-platform analysis)"
+        return "DIVERGENCES: I don't know (install Prediction Market Arbiter for cross-platform analysis)"
 
     if freshness == "stale":
         log(f"Arbiter cache stale: {age}s old", debug)
-        return "DIVERGENCES: unavailable (Arbiter data stale)"
+        return "DIVERGENCES: I don't know (Arbiter data is stale)"
 
     try:
         with open(cache_path) as f:
@@ -243,7 +256,7 @@ def format_arbiter_section(cache_path, config, debug=False):
 
     except Exception as e:
         log(f"Arbiter parse error: {e}", debug)
-        return "DIVERGENCES: unavailable (cache corrupted)"
+        return "DIVERGENCES: I don't know (cache corrupted)"
 
 
 def format_xpulse_section(cache_path, config, debug=False):
@@ -251,11 +264,11 @@ def format_xpulse_section(cache_path, config, debug=False):
     freshness, age = check_cache_age(cache_path, 14400)  # 4 hour tolerance
 
     if freshness == "missing":
-        return "X SIGNALS: unavailable (install Xpulse for social sentiment analysis)"
+        return "X SIGNALS: I don't know (install Xpulse for social sentiment analysis)"
 
     if freshness == "stale":
         log(f"Xpulse cache stale: {age}s old", debug)
-        return "X SIGNALS: unavailable (Xpulse data stale)"
+        return "X SIGNALS: I don't know (Xpulse data is stale)"
 
     try:
         with open(cache_path) as f:
@@ -300,7 +313,7 @@ def format_xpulse_section(cache_path, config, debug=False):
 
     except Exception as e:
         log(f"Xpulse parse error: {e}", debug)
-        return "X SIGNALS: unavailable (cache corrupted)"
+        return "X SIGNALS: I don't know (cache corrupted)"
 
 
 def format_crypto_section(config, debug=False):

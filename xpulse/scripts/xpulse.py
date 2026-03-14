@@ -326,35 +326,26 @@ def _get_active_kalshi_topics() -> list:
 
         client = KalshiClient(config)
 
-        # SDK 3.x signature varies — call with no kwargs, filter locally
-        try:
-            resp = client.get_positions(limit=100, settlement_status="unsettled")
-        except (TypeError, Exception) as sdk_err:
-            _log(f"get_positions with kwargs failed ({sdk_err}), retrying without")
-            resp = client.get_positions()
+        # Raw API call — avoids SDK v3 pydantic deserialization bug (Issue #9)
+        resp = client._portfolio_api.get_positions_without_preload_content(limit=100)
+        raw_data = json.loads(resp.read())
+        _log(f"Raw positions API keys: {sorted(raw_data.keys())}")
 
-        # SDK returns GetPositionsResponse — extract market_positions
-        # Use getattr with default to handle SDK versions where hasattr returns False
-        # even though the attribute exists (descriptor/property edge case)
-        if isinstance(resp, dict):
-            positions = resp.get("market_positions", [])
-        else:
-            positions = getattr(resp, "market_positions", None)
-            if positions is None:
-                # Last resort: try iterating common wrapper keys via __dict__ or to_dict()
-                try:
-                    d = resp.to_dict() if hasattr(resp, "to_dict") else vars(resp)
-                    positions = d.get("market_positions", [])
-                except Exception:
-                    positions = []
-                _log(f"market_positions via fallback dict extraction, type was: {type(resp)}")
-            positions = positions or []
+        positions = (
+            raw_data.get("event_positions")
+            or raw_data.get("positions")
+            or raw_data.get("market_positions")
+            or []
+        )
 
-        # Filter to unsettled positions locally if API didn't filter
+        # Filter to unsettled, non-zero positions locally
         filtered = []
         for p in positions:
-            status = getattr(p, "settlement_status", None) or (p.get("settlement_status") if isinstance(p, dict) else None)
-            if status is None or status == "unsettled":
+            status = p.get("settlement_status")
+            if status is not None and status != "unsettled":
+                continue
+            qty = int(float(p.get("position_fp") or p.get("position", 0) or 0))
+            if qty != 0:
                 filtered.append(p)
         positions = filtered
 

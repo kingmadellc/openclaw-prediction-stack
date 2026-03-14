@@ -103,75 +103,58 @@ class PortfolioDriftMonitor:
 
     def get_current_portfolio(self) -> Dict[str, Any]:
         """
-        Fetch current portfolio from Kalshi API using get_positions().
+        Fetch current portfolio from Kalshi API using raw API call.
 
-        Handles SDK v3 (.positions) and v2 (.market_positions) response formats.
+        Uses _portfolio_api.get_positions_without_preload_content() to avoid
+        SDK v3 pydantic deserialization bugs (typed get_positions() returns
+        None attributes for position fields, causing false empty portfolios).
 
         Returns:
             Dict with portfolio metadata and positions indexed by market symbol
         """
         try:
-            # Use get_positions() — the correct SDK method (not get_portfolio())
-            try:
-                response = self.client.get_positions(limit=100, settlement_status="unsettled")
-            except (TypeError, Exception):
-                response = self.client.get_positions()
+            # Raw API call — avoids SDK pydantic deserialization bug (Issue #9)
+            # SDK typed get_positions() returns broken pydantic objects with None fields
+            resp = self.client._portfolio_api.get_positions_without_preload_content(limit=100)
+            raw_data = json.loads(resp.read())
 
-            # Extract positions list — handle SDK v3 (.positions) and v2 (.market_positions)
+            # Schema validation
             _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
             _EMPTY_ONLY_KEYS = {"cursor"}  # Kalshi returns only cursor when portfolio is empty
-            raw_positions = []
-            if isinstance(response, dict):
-                # Schema validation — fail loud if Kalshi changed field names again
-                # Exception: response with only cursor/pagination keys = empty portfolio, not schema error
-                if response and not any(k in response for k in _KNOWN_POS_KEYS):
-                    if not set(response.keys()) <= _EMPTY_ONLY_KEYS:
-                        raise RuntimeError(
-                            f"SCHEMA DRIFT: Kalshi API response has none of the expected position keys. "
-                            f"Got: {sorted(response.keys())}. Expected one of: {_KNOWN_POS_KEYS}. "
-                            f"Kalshi changed their API — fix field names in portfolio_drift.py."
-                        )
-                raw_positions = response.get("event_positions") or response.get("positions") or response.get("market_positions", [])
-            else:
-                # SDK object — try .event_positions (v3 API), .positions (SDK), .market_positions (v2)
-                raw_positions = getattr(response, "event_positions", None)
-                if raw_positions is None:
-                    raw_positions = getattr(response, "positions", None)
-                if raw_positions is None:
-                    raw_positions = getattr(response, "market_positions", None)
-                if raw_positions is None:
-                    try:
-                        d = response.to_dict() if hasattr(response, "to_dict") else vars(response)
-                        raw_positions = d.get("event_positions") or d.get("positions") or d.get("market_positions", [])
-                    except Exception:
-                        raw_positions = []
-                raw_positions = raw_positions or []
 
-            # Index by market ticker
+            if raw_data and not any(k in raw_data for k in _KNOWN_POS_KEYS):
+                if not set(raw_data.keys()) <= _EMPTY_ONLY_KEYS:
+                    raise RuntimeError(
+                        f"SCHEMA DRIFT: Kalshi API response has none of the expected position keys. "
+                        f"Got: {sorted(raw_data.keys())}. Expected one of: {_KNOWN_POS_KEYS}. "
+                        f"Kalshi changed their API — fix field names in portfolio_drift.py."
+                    )
+
+            raw_positions = (
+                raw_data.get("event_positions")
+                or raw_data.get("positions")
+                or raw_data.get("market_positions")
+                or []
+            )
+
+            # Index by market ticker, filter out zero-quantity positions
             positions = {}
             for pos in raw_positions:
-                if isinstance(pos, dict):
-                    pos = _normalize_position(pos)
-                    ticker = pos.get("ticker", pos.get("market_ticker", "unknown"))
-                    side = pos.get("side", "unknown")
-                    # v3 API: position_fp (float), v2: position (int), fallback: total_traded/shares
-                    _pos_val = pos.get("position_fp") or pos.get("position") or pos.get("total_traded") or pos.get("shares", 0)
-                    try:
-                        shares = float(_pos_val or 0)
-                    except (ValueError, TypeError):
-                        shares = 0.0
-                    avg_price = float(pos.get("average_price", pos.get("avg_price", 0)) or 0)
-                    pnl = float(pos.get("realized_pnl", pos.get("pnl", 0)) or 0)
-                else:
-                    ticker = getattr(pos, "ticker", getattr(pos, "market_ticker", "unknown")) or "unknown"
-                    side = getattr(pos, "side", "unknown") or "unknown"
-                    _pos_val = getattr(pos, "position_fp", None) or getattr(pos, "position", None) or getattr(pos, "total_traded", None) or getattr(pos, "shares", 0)
-                    try:
-                        shares = float(_pos_val or 0)
-                    except (ValueError, TypeError):
-                        shares = 0.0
-                    avg_price = float(getattr(pos, "average_price", getattr(pos, "avg_price", 0)) or 0)
-                    pnl = float(getattr(pos, "realized_pnl", getattr(pos, "pnl", 0)) or 0)
+                pos = _normalize_position(pos)
+                ticker = pos.get("ticker") or pos.get("market_ticker") or "unknown"
+                side = pos.get("side", "unknown")
+                # v3 API: position_fp (float string), v2: position (int)
+                _pos_val = pos.get("position_fp") or pos.get("position") or pos.get("total_traded") or pos.get("shares", 0)
+                try:
+                    shares = float(_pos_val or 0)
+                except (ValueError, TypeError):
+                    shares = 0.0
+
+                if shares == 0.0:
+                    continue  # Skip settled/zero positions
+
+                avg_price = float(pos.get("average_price", pos.get("avg_price", 0)) or 0)
+                pnl = float(pos.get("realized_pnl", pos.get("pnl", 0)) or 0)
 
                 positions[ticker] = {
                     "side": side,
@@ -353,27 +336,16 @@ class PortfolioDriftMonitor:
     def _preflight_schema_check(self) -> None:
         """Verify Kalshi API response schema before running drift check.
 
-        Fetches 1 position and asserts expected keys exist. Raises RuntimeError
-        with actionable error message if schema has drifted. This catches field
-        name changes BEFORE they cause silent empty-portfolio results.
+        Uses raw API call (not SDK typed method) to fetch 1 position and assert
+        expected keys exist. Raises RuntimeError if schema has drifted.
         """
         try:
-            try:
-                response = self.client.get_positions(limit=1)
-            except (TypeError, Exception):
-                response = self.client.get_positions()
-
-            if isinstance(response, dict):
-                data = response
-            elif hasattr(response, "to_dict"):
-                data = response.to_dict()
-            else:
-                data = vars(response) if hasattr(response, "__dict__") else {}
+            resp = self.client._portfolio_api.get_positions_without_preload_content(limit=1)
+            data = json.loads(resp.read())
 
             _KNOWN_POS_KEYS = ("event_positions", "positions", "market_positions")
             _EMPTY_ONLY_KEYS = {"cursor"}  # Kalshi returns only cursor when portfolio is empty
             if data and not any(k in data for k in _KNOWN_POS_KEYS):
-                # If response only has pagination metadata (cursor), portfolio is empty — not a schema error
                 if set(data.keys()) <= _EMPTY_ONLY_KEYS:
                     return  # Empty portfolio, schema is fine
                 raise RuntimeError(
