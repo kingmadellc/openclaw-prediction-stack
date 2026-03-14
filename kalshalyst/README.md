@@ -7,11 +7,11 @@ Autonomous prediction market trading system for Kalshi. Scans markets, estimates
 
 ## Quick Start
 
-1. Get a Kalshi API key at https://kalshi.com (Settings → API) — must have trading permissions
-2. Configure credentials in `~/.openclaw/config.yaml`
-3. Configure auto-trader in `~/.openclaw/auto_trader_config.json`
-4. Dry run: `python3 scripts/auto_trader.py --dry-run`
-5. Live: `python3 scripts/auto_trader.py`
+1. Preview the scanner immediately: `python3 scripts/kalshalyst.py --dry-run`
+2. Optional: add Kalshi credentials in `~/.openclaw/config.yaml` to switch from demo opportunities to live scan results
+3. Configure auto-trader in `~/.openclaw/auto_trader_config.json` only if you want execution
+4. Auto-trader dry run: `python3 scripts/auto_trader.py --dry-run`
+5. Auto-trader live: `python3 scripts/auto_trader.py`
 
 ## Pipeline
 
@@ -35,7 +35,7 @@ Designed for hands-off operation via launchd (macOS) or cron. Recommended: 4 sca
 
 ## Cost
 
-Reference path: Anthropic-backed Claude estimation plus optional free local Qwen fallback. Typical Claude spend is variable by run volume; Kalshi API remains free.
+Reference path: Anthropic-backed Claude estimation plus optional free local Qwen fallback. First run shows demo opportunities if Kalshi credentials are missing so users can preview the scan before setup.
 
 ## Full Documentation
 

@@ -110,6 +110,22 @@ DEMO_POLYMARKET = [
     {"question": "Will Congress pass stablecoin legislation in 2026?", "volume": 1900000, "implied_prob": 44},
 ]
 
+LOW_SIGNAL_POLYMARKET_PATTERNS = (
+    "highest temperature",
+    "temperature in",
+    "rainfall",
+    "snowfall",
+    "precipitation",
+    "game ",
+    "match ",
+    "tournament",
+    "masters",
+    "esports",
+    "vs ",
+    "team ",
+    "player ",
+)
+
 
 def log(msg, debug=False):
     """Log message to stderr if debug enabled."""
@@ -171,6 +187,14 @@ def emphasize(value):
     return f"**{value}**"
 
 
+def is_low_signal_polymarket_market(question):
+    """Suppress noisy first-run markets so the section stays trader-relevant."""
+    text = (question or "").strip().lower()
+    if not text:
+        return True
+    return any(pattern in text for pattern in LOW_SIGNAL_POLYMARKET_PATTERNS)
+
+
 def format_demo_portfolio_section():
     """Show a realistic portfolio preview when Kalshi isn't configured yet."""
     total_unrealized = 0.0
@@ -189,7 +213,7 @@ def format_demo_portfolio_section():
         )
 
     header = (
-        f"PORTFOLIO DEMO ({emphasize(len(DEMO_PORTFOLIO))} positions, "
+        f"PORTFOLIO P&L PREVIEW ({emphasize(len(DEMO_PORTFOLIO))} positions, "
         f"{emphasize(f'+${total_unrealized:.0f}') if total_unrealized >= 0 else emphasize(f'-${abs(total_unrealized):.0f}')} unrealized):"
     )
     return "\n".join([header] + lines)
@@ -197,7 +221,7 @@ def format_demo_portfolio_section():
 
 def format_demo_edges_section():
     """Show a sample edge section before the rest of the stack is configured."""
-    lines = ["EDGES DEMO (Kalshalyst, top 3):"]
+    lines = ["TOP 3 EDGES PREVIEW (Kalshalyst):"]
     for i, edge in enumerate(DEMO_EDGES, 1):
         side = "YES" if edge["estimated_prob"] > edge["market_prob"] else "NO"
         market_prob_str = f"{edge['market_prob'] * 100:.0f}%"
@@ -325,7 +349,7 @@ def format_portfolio_section(kalshi, config, debug=False):
         else:
             total_str = f"+${total_unrealized:.0f}" if total_unrealized >= 0 else f"-${abs(total_unrealized):.0f}"
             lines[0] = (
-                f"PORTFOLIO ({emphasize(len(positions))} positions, {emphasize(total_str)} unrealized):"
+                f"PORTFOLIO P&L ({emphasize(len(positions))} positions, {emphasize(total_str)} unrealized):"
             )
 
         return "\n".join(lines)
@@ -350,11 +374,19 @@ def format_kalshalyst_section(cache_path, config, debug=False):
         with open(cache_path) as f:
             data = json.load(f)
 
+        status = data.get("status", "")
+        message = data.get("message", "")
         insights = data.get("insights", [])[:3]
         if not insights:
-            return "EDGES: none found"
+            if status == "demo":
+                return format_demo_edges_section()
+            clear_message = message or "No edge markets right now."
+            return f"TOP EDGES: {clear_message} Check back later."
 
-        lines = [f"EDGES (Kalshalyst, top {len(insights)}):"]
+        if status == "demo":
+            lines = [f"TOP {len(insights)} EDGES PREVIEW (Kalshalyst):"]
+        else:
+            lines = [f"TOP {len(insights)} EDGES (Kalshalyst):"]
 
         for i, edge in enumerate(insights, 1):
             ticker = edge.get("ticker", "?")
@@ -545,8 +577,19 @@ def format_polymarket_section(config, debug=False):
         if not markets:
             return format_demo_polymarket_section()
 
-        # Take top 3 by volume
-        markets = markets[:3]
+        filtered_markets = []
+        for market in markets:
+            question = market.get("question", market.get("title", ""))
+            if is_low_signal_polymarket_market(question):
+                continue
+            filtered_markets.append(market)
+            if len(filtered_markets) == 3:
+                break
+
+        if len(filtered_markets) < 3:
+            return format_demo_polymarket_section()
+
+        markets = filtered_markets
         if all(float(m.get("volume", 0) or 0) < 1000 for m in markets):
             return format_demo_polymarket_section()
 
@@ -589,6 +632,10 @@ def build_morning_brief(config, kalshi=None, debug=False):
     header = f"MARKET MORNING BRIEF — {now.strftime('%A, %B %d, %Y')}"
 
     sections = [header]
+    if not kalshi:
+        sections.append(
+            "FIRST RUN PREVIEW: sample portfolio and edge sections are shown so you can see the brief before wiring Kalshi credentials."
+        )
 
     # Portfolio (required)
     if config.get("include", {}).get("portfolio", True):

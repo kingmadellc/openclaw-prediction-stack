@@ -24,12 +24,13 @@ from typing import Dict, Any, List, Tuple
 
 try:
     from kalshi_python_sync import Configuration, KalshiClient
+    _KALSHI_SDK_AVAILABLE = True
 except ImportError:
     try:
         from kalshi_python import Configuration, KalshiClient
+        _KALSHI_SDK_AVAILABLE = True
     except ImportError:
-        print("ERROR: Neither kalshi_python_sync nor kalshi_python found.")
-        sys.exit(1)
+        _KALSHI_SDK_AVAILABLE = False
 
 try:
     import yaml
@@ -41,13 +42,44 @@ except ImportError:
 def _normalize_position(p: dict) -> dict:
     """Normalize Kalshi API v3 position fields.
 
-    Kalshi API may change position field names. This helper ensures we handle
-    both old and new field names gracefully. Currently a pass-through; if Kalshi
-    changes position schema, update this function to normalize field names.
+    Kalshi API v3 returns event_positions with different field names than
+    the market-level positions the parser expects. This maps event-level
+    fields to the canonical names used downstream.
+
+    Event-level fields (v3):
+        event_ticker -> ticker
+        total_cost_shares_fp -> position_fp
+        event_exposure_dollars -> exposure (new, used for zero-position filtering)
+        realized_pnl_dollars -> realized_pnl
+        total_cost_dollars -> total_cost
+        fees_paid_dollars -> fees_paid
     """
-    # Currently positions use position_fp, average_price, realized_pnl which are stable.
-    # If Kalshi renames these, add normalization logic here.
-    return p
+    normalized = dict(p)
+
+    # Map event_ticker -> ticker (if no market-level ticker present)
+    if "ticker" not in normalized and "market_ticker" not in normalized:
+        if "event_ticker" in normalized:
+            normalized["ticker"] = normalized["event_ticker"]
+
+    # Map total_cost_shares_fp -> position_fp (total shares in the event)
+    if "position_fp" not in normalized and "position" not in normalized:
+        if "total_cost_shares_fp" in normalized:
+            normalized["position_fp"] = normalized["total_cost_shares_fp"]
+
+    # Map realized_pnl_dollars -> realized_pnl
+    if "realized_pnl" not in normalized and "pnl" not in normalized:
+        if "realized_pnl_dollars" in normalized:
+            normalized["realized_pnl"] = normalized["realized_pnl_dollars"]
+
+    # Map event_exposure_dollars -> exposure (used for filtering settled events)
+    if "event_exposure_dollars" in normalized:
+        normalized["exposure"] = normalized["event_exposure_dollars"]
+
+    # Map total_cost_dollars -> total_cost (useful for avg price estimation)
+    if "total_cost_dollars" in normalized:
+        normalized["total_cost"] = normalized["total_cost_dollars"]
+
+    return normalized
 
 
 class PortfolioDriftMonitor:
@@ -55,6 +87,13 @@ class PortfolioDriftMonitor:
 
     def __init__(self):
         """Initialize monitor with configuration from config.yaml (env vars as fallback)."""
+        if not _KALSHI_SDK_AVAILABLE:
+            raise RuntimeError(
+                "Kalshi SDK not installed.\n"
+                "Install with: pip install kalshi-python-sync\n"
+                "Or: pip install kalshi-python"
+            )
+
         # Load from config.yaml first, env vars as fallback
         config = self._load_config()
         kalshi_cfg = config.get("kalshi", {})
@@ -64,14 +103,27 @@ class PortfolioDriftMonitor:
         self.threshold_pct = float(os.getenv("PORTFOLIO_DRIFT_THRESHOLD", "5.0"))
         self.interval_minutes = int(os.getenv("PORTFOLIO_DRIFT_INTERVAL", "60"))
 
-        # Validate credentials
+        # Validate credentials with clear guidance
         if not self.key_id or not self.key_path:
             raise ValueError(
-                "Kalshi credentials required in ~/.openclaw/config.yaml or env vars"
+                "Kalshi credentials not configured.\n"
+                "\n"
+                "Add to ~/.openclaw/config.yaml:\n"
+                "  kalshi:\n"
+                "    enabled: true\n"
+                "    api_key_id: YOUR_KEY_ID\n"
+                "    private_key_file: keys/private.key\n"
+                "\n"
+                "Or set env vars: KALSHI_KEY_ID + KALSHI_KEY_PATH\n"
+                "Get API keys at: https://kalshi.com/account/api"
             )
 
         if not os.path.exists(self.key_path):
-            raise FileNotFoundError(f"Kalshi key file not found: {self.key_path}")
+            raise FileNotFoundError(
+                f"Kalshi private key file not found: {self.key_path}\n"
+                "Download your private key from https://kalshi.com/account/api\n"
+                "and save it to the path configured in config.yaml."
+            )
 
         # State file location
         self.state_dir = Path.home() / ".openclaw" / "state"
@@ -137,12 +189,13 @@ class PortfolioDriftMonitor:
                 or []
             )
 
-            # Index by market ticker, filter out zero-quantity positions
+            # Index by ticker, filter out settled/zero-exposure positions
             positions = {}
             for pos in raw_positions:
                 pos = _normalize_position(pos)
                 ticker = pos.get("ticker") or pos.get("market_ticker") or "unknown"
                 side = pos.get("side", "unknown")
+
                 # v3 API: position_fp (float string), v2: position (int)
                 _pos_val = pos.get("position_fp") or pos.get("position") or pos.get("total_traded") or pos.get("shares", 0)
                 try:
@@ -150,15 +203,32 @@ class PortfolioDriftMonitor:
                 except (ValueError, TypeError):
                     shares = 0.0
 
-                if shares == 0.0:
-                    continue  # Skip settled/zero positions
+                # For event-level positions, also check exposure — a position with
+                # shares > 0 but exposure == 0 is fully settled (historical trade)
+                try:
+                    exposure = float(pos.get("exposure", -1) or -1)
+                except (ValueError, TypeError):
+                    exposure = -1  # Unknown exposure, don't filter on it
+
+                # Skip if both shares and exposure are zero (definitely settled)
+                if shares == 0.0 and exposure == 0.0:
+                    continue
+                # Skip if shares is zero and no exposure data available
+                if shares == 0.0 and exposure < 0:
+                    continue
 
                 avg_price = float(pos.get("average_price", pos.get("avg_price", 0)) or 0)
                 pnl = float(pos.get("realized_pnl", pos.get("pnl", 0)) or 0)
+                total_cost = float(pos.get("total_cost", 0) or 0)
+
+                # Estimate avg_price from total_cost / shares if not provided directly
+                if avg_price == 0.0 and shares > 0 and total_cost > 0:
+                    avg_price = round(total_cost / shares, 4)
 
                 positions[ticker] = {
                     "side": side,
                     "shares": shares,
+                    "exposure": exposure if exposure >= 0 else 0.0,
                     "avg_price": avg_price,
                     "pnl": pnl,
                     "pnl_percent": 0.0,

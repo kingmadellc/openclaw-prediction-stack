@@ -10,10 +10,9 @@ clawhub install market-morning-brief
 
 ## Quick Start
 
-1. Get a Kalshi API key at https://kalshi.com (Settings → API)
-2. Configure credentials in `~/.openclaw/config.yaml`
-3. Run: `python scripts/morning_brief.py`
-4. For evening brief: `python scripts/evening_brief.py --mode market`
+1. Preview it immediately: `python scripts/morning_brief.py`
+2. Optional: add Kalshi credentials in `~/.openclaw/config.yaml` to replace the portfolio preview with your live P&L
+3. Optional: run `python scripts/evening_brief.py --mode market`
 
 ## What You Get
 
@@ -26,7 +25,7 @@ clawhub install market-morning-brief
 | **X Signals** | Xpulse cache | Optional |
 | **Crypto Prices** | Coinbase API | Optional |
 
-Works standalone. Each additional skill adds a new section automatically — no configuration needed.
+Works standalone. First run shows a useful preview even before credentials are configured. Each additional skill adds a new section automatically.
 
 ## Evening Brief
 

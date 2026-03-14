@@ -139,6 +139,24 @@ def _write_demo_cache() -> None:
         logger.warning("Could not write demo cache: %s", e)
 
 
+def _show_demo_scan(next_step: str) -> None:
+    """Render a friendly preview when live scanning is unavailable."""
+    _write_demo_cache()
+    _print_top_opportunities(DEMO_SCAN_INSIGHTS, "TOP 3 EDGE OPPORTUNITIES (DEMO)")
+    logger.info("")
+    logger.info("%s", next_step)
+
+
+def _verify_kalshi_client(client) -> None:
+    """Verify auth with a raw API call that avoids SDK model parsing bugs."""
+    url = "https://api.elections.kalshi.com/trade-api/v2/portfolio/positions?limit=1"
+    resp = client.call_api("GET", url)
+    payload = json.loads(resp.read())
+    expected_keys = {"cursor", "event_positions", "positions", "market_positions"}
+    if not isinstance(payload, dict) or not set(payload.keys()) <= expected_keys:
+        raise RuntimeError(f"unexpected auth probe response keys: {sorted(payload.keys())}")
+
+
 def _print_top_opportunities(insights: list[dict], header: str) -> None:
     """Render the top opportunities in a scannable, reviewer-friendly block."""
     logger.info("")
@@ -796,19 +814,18 @@ if __name__ == "__main__":
         cfg["fresh_mode"] = True
 
     # ── Load config from ~/.openclaw/config.yaml ──
+    yaml = None
     try:
-        import yaml
+        import yaml as _yaml
+        yaml = _yaml
     except ImportError:
-        logger.error("pyyaml not installed — run: pip3 install pyyaml")
-        sys.exit(1)
+        logger.warning("pyyaml not installed — continuing with demo-friendly defaults.")
 
     config_path = Path.home() / ".openclaw" / "config.yaml"
-    if not config_path.exists():
-        logger.error(f"Config not found: {config_path}")
-        sys.exit(1)
-
-    with open(config_path) as f:
-        file_config = yaml.safe_load(f) or {}
+    file_config = {}
+    if config_path.exists() and yaml:
+        with open(config_path) as f:
+            file_config = yaml.safe_load(f) or {}
 
     kalshi_cfg = file_config.get("kalshi", {})
     key_id = kalshi_cfg.get("api_key_id", "")
@@ -821,10 +838,7 @@ if __name__ == "__main__":
         logger.warning(
             "Kalshi credentials missing — showing demo scan so you can preview the output before setup."
         )
-        _write_demo_cache()
-        _print_top_opportunities(DEMO_SCAN_INSIGHTS, "TOP 3 EDGE OPPORTUNITIES (DEMO)")
-        logger.info("")
-        logger.info("Demo only: add Kalshi credentials in ~/.openclaw/config.yaml to run the live scanner.")
+        _show_demo_scan("Demo only: add Kalshi credentials in ~/.openclaw/config.yaml to run the live scanner.")
         sys.exit(0)
 
     # ── Initialize Kalshi SDK client ──
@@ -842,21 +856,14 @@ if __name__ == "__main__":
         client = KalshiClient(sdk_config)
         sdk_config.private_key_pem = None  # clear PEM from memory
 
-        # Verify auth
-        try:
-            client.get_positions(limit=1)
-        except (TypeError, AttributeError):
-            pass  # SDK version difference — client is still valid
+        _verify_kalshi_client(client)
         logger.info("Kalshi client initialized successfully")
     except Exception as e:
         logger.warning(
             "Kalshi client init failed — showing demo scan instead: %s",
             str(e).splitlines()[0],
         )
-        _write_demo_cache()
-        _print_top_opportunities(DEMO_SCAN_INSIGHTS, "TOP 3 EDGE OPPORTUNITIES (DEMO)")
-        logger.info("")
-        logger.info("Demo only: fix Kalshi auth/init to run the live scanner.")
+        _show_demo_scan("Demo only: fix Kalshi auth/init to run the live scanner.")
         sys.exit(0)
 
     # ── Run pipeline ──

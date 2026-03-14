@@ -25,6 +25,8 @@ The key insight: blind estimation (not seeing prices) produces consensus-matchin
 - You want to size positions intelligently based on edge and confidence
 - You're building a systematic prediction market trading system
 
+First run does not require Kalshi credentials. If they are missing, Kalshalyst prints a realistic demo scan and writes demo cache data so downstream tools like Market Morning Brief still have something useful to show.
+
 ## Requirements
 
 ### API Keys & Credentials

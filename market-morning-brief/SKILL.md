@@ -17,6 +17,7 @@ Market Morning Brief is a lightweight, resilient daily intelligence system desig
 - **Polymarket insights** — Notable markets and volume activity
 
 The brief is designed for **30-second scanning** — each section is 3-8 lines maximum. If a data source is unavailable, the section gracefully degrades to "unavailable" and the brief continues.
+If Kalshi credentials are not configured yet, the brief shows a realistic preview portfolio and edge block so first-time users still see value immediately.
 
 ## When to Use This Skill
 
@@ -55,7 +56,7 @@ If a cache file doesn't exist (skill not installed), that section simply shows "
 
 ## Configuration
 
-Create or update your `config.yaml`:
+Create or update your `config.yaml` when you want live account data. The first run works without it and shows preview output:
 
 ```yaml
 market_morning_brief:

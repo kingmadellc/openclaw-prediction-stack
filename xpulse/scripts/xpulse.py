@@ -10,9 +10,13 @@ import subprocess
 import sys
 import time
 import logging
-import yaml
 from pathlib import Path
 from typing import Optional
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -41,6 +45,9 @@ STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 def _load_config() -> dict:
     """Load config from first available path."""
+    if yaml is None:
+        logging.debug("PyYAML not installed — running with defaults")
+        return {}
     for path in CONFIG_PATHS:
         if path.exists():
             with open(path) as f:
@@ -109,8 +116,7 @@ def _check_ollama_model() -> bool:
         return False
 
 
-# Run model check on import (non-blocking warning)
-_check_ollama_model()
+# Ollama check is deferred to first use — avoids confusing warnings on unconfigured installs
 
 
 def _call_ollama(prompt: str, timeout: int = 15) -> Optional[dict]:
@@ -429,8 +435,23 @@ def check_x_signals(state: dict, dry_run: bool = False, force: bool = False) -> 
     min_confidence = XPULSE_CFG.get("min_confidence", 0.7)
 
     if not topics:
-        _log("No topics configured for X signal scanner")
+        logging.info(
+            "⚠️  Xpulse: no topics configured — nothing to scan.\n"
+            "\n"
+            "   Add topics to ~/.openclaw/config.yaml:\n"
+            "     xpulse:\n"
+            "       enabled: true\n"
+            "       topics:\n"
+            "         - tariffs\n"
+            "         - federal reserve\n"
+            "         - bitcoin\n"
+            "\n"
+            "   Then run again: python xpulse.py --dry-run --force"
+        )
         return False
+
+    # Check Ollama availability only when we have topics to scan
+    _check_ollama_model()
 
     _log(f"X signal scanner starting... ({len(topics)} topics)")
 
