@@ -24,7 +24,8 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from trade_ledger import record_trade
+from trade_ledger import get_summary as get_ledger_summary
+from trade_ledger import record_trade, update_trade_confirmation
 
 # ── Logging ───────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -132,6 +133,73 @@ def _log_state(event: str, data: dict):
                 fcntl.flock(f, fcntl.LOCK_UN)
     except Exception as e:
         logger.warning(f"Failed to write state log: {e}")
+
+
+def _ledger_context() -> dict:
+    """Return what the local ledger still knows when APIs are uncertain."""
+    try:
+        summary = get_ledger_summary()
+    except Exception as e:
+        return {
+            "ledger_known_positions": 0,
+            "ledger_deployed_usd": 0.0,
+            "ledger_tickers": [],
+            "ledger_error": str(e)[:200],
+        }
+
+    return {
+        "ledger_known_positions": summary.get("open_positions", 0),
+        "ledger_deployed_usd": summary.get("total_deployed_usd", 0.0),
+        "ledger_tickers": sorted(summary.get("positions", {}).keys()),
+    }
+
+
+def _fail_loud_result(reason: str, edges: list, *, known: str = "") -> dict:
+    """Return an explicit unknown-state summary instead of fabricated certainty."""
+    message = "I don't know"
+    if known:
+        message += f" — {known}"
+    return {
+        "trades_executed": 0,
+        "trades_skipped": len(edges),
+        "reason": reason,
+        "message": message,
+        **_ledger_context(),
+    }
+
+
+def _reconcile_trade_with_portfolio(
+    client,
+    ticker: str,
+    side: str,
+    contracts: int,
+    before_positions: dict,
+    wait_seconds: float,
+) -> tuple[bool, str, dict]:
+    """Wait, re-query the portfolio API, and verify the position exists."""
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+
+    try:
+        after_positions = get_current_positions(client)
+    except RuntimeError as e:
+        return False, f"I don't know — could not re-fetch positions after execution: {e}", {}
+
+    before_qty = before_positions.get(ticker, {}).get("position", 0)
+    after = after_positions.get(ticker)
+    after_qty = after.get("position", 0) if after else 0
+    expected_delta = contracts if side == "yes" else -contracts
+    observed_delta = after_qty - before_qty
+
+    if side == "yes" and observed_delta >= contracts:
+        return True, f"confirmed via portfolio API ({before_qty} -> {after_qty})", after_positions
+    if side == "no" and observed_delta <= -contracts:
+        return True, f"confirmed via portfolio API ({before_qty} -> {after_qty})", after_positions
+
+    return False, (
+        "I don't know — order was submitted but the expected position delta "
+        f"never appeared ({before_qty} -> {after_qty})"
+    ), after_positions
 
 
 # ── Safety Checks ─────────────────────────────────────────────────────────
@@ -338,6 +406,7 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
     max_positions = auto_cfg.get("max_concurrent_positions", 8)
     max_exposure = auto_cfg.get("max_portfolio_exposure_usd", 200.0)
     bankroll = auto_cfg.get("bankroll_usd", 100.0)
+    reconcile_wait = float(auto_cfg.get("reconciliation_wait_seconds", 30))
 
     # ── Pre-flight checks ─────────────────────────────────────────────
     # Balance check — must succeed or abort
@@ -346,7 +415,7 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
     except RuntimeError as e:
         _log_state("abort", {"reason": f"Cannot fetch balance: {e}"})
         logger.error(f"Aborting: cannot verify balance — {e}")
-        return {"trades_executed": 0, "trades_skipped": len(edges), "reason": "balance_fetch_failed"}
+        return _fail_loud_result("balance_fetch_failed", edges, known=f"ledger still tracks {_ledger_context().get('ledger_known_positions', 0)} open positions")
     if balance < 5.0:
         _log_state("abort", {"reason": f"Insufficient balance: ${balance:.2f}"})
         logger.warning(f"Aborting: balance ${balance:.2f} < $5 minimum")
@@ -365,7 +434,7 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
     except RuntimeError as e:
         _log_state("abort", {"reason": f"Cannot fetch positions: {e}"})
         logger.error(f"Aborting: cannot verify current positions — {e}")
-        return {"trades_executed": 0, "trades_skipped": len(edges), "reason": "positions_fetch_failed"}
+        return _fail_loud_result("positions_fetch_failed", edges, known=f"trade ledger has {get_ledger_summary().get('open_positions', 0)} open positions")
     num_positions = len(positions)
     exposure = get_portfolio_exposure(positions)
 
@@ -504,6 +573,7 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
         # Live execution
         try:
             from kalshi_commands import _place_order, _trade_audit
+            before_trade_positions = dict(positions)
 
             order_result = _place_order("buy", ticker, side, result.contracts, exec_price)
 
@@ -516,18 +586,42 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
                 "order_result": order_result[:200],
             })
 
-            if "✅" in order_result and "UNVERIFIED" not in order_result:
-                logger.info(f"EXECUTED: {side.upper()} {result.contracts}x {ticker} @ {exec_price}¢ "
-                            f"(${result.cost_usd:.2f}, edge={effective_edge:.1f}%)")
-                logger.info(f"  Verification: {order_result.split(chr(10))[-1] if chr(10) in order_result else 'n/a'}")
-
-                # Write to local trade ledger (ground truth when API is broken)
-                record_trade(
+            submitted = order_result.startswith("✅") or order_result.startswith("❓")
+            if submitted:
+                logger.info(
+                    f"SUBMITTED: {side.upper()} {result.contracts}x {ticker} @ {exec_price}¢ "
+                    f"(${result.cost_usd:.2f}, edge={effective_edge:.1f}%)"
+                )
+                trade_record = record_trade(
                     ticker=ticker, side=side, contracts=result.contracts,
                     price_cents=exec_price, cost_usd=result.cost_usd,
                     edge_pct=effective_edge, confidence=confidence,
-                    order_id="", title=title, dry_run=False,
+                    order_id="", order_result=order_result[:200], title=title, dry_run=False,
                 )
+
+                confirmed, confirmation_details, refreshed_positions = _reconcile_trade_with_portfolio(
+                    client,
+                    ticker=ticker,
+                    side=side,
+                    contracts=result.contracts,
+                    before_positions=before_trade_positions,
+                    wait_seconds=reconcile_wait,
+                )
+                update_trade_confirmation(
+                    trade_record["id"],
+                    confirmation_status="confirmed" if confirmed else "unconfirmed",
+                    details=confirmation_details,
+                )
+                _log_state(
+                    "trade_reconciled",
+                    {
+                        "ticker": ticker,
+                        "trade_id": trade_record["id"],
+                        "confirmed": confirmed,
+                        "details": confirmation_details[:200],
+                    },
+                )
+                logger.info("  Reconciliation: %s", confirmation_details)
 
                 executed_trades.append({
                     "ticker": ticker,
@@ -537,14 +631,17 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
                     "edge_pct": effective_edge,
                     "cost_usd": result.cost_usd,
                     "dry_run": False,
+                    "confirmed": confirmed,
+                    "confirmation_details": confirmation_details,
                 })
-                executed += 1
-                remaining_balance -= result.cost_usd
-                exposure += result.cost_usd
-            elif "✅" in order_result and "UNVERIFIED" in order_result:
-                logger.warning(f"Order placed but UNVERIFIED for {ticker}: {order_result[:200]}")
-                errors.append(f"unverified:{ticker}")
-                skipped += 1
+                if confirmed:
+                    executed += 1
+                    remaining_balance -= result.cost_usd
+                    exposure += result.cost_usd
+                    positions = refreshed_positions or positions
+                else:
+                    errors.append(f"unconfirmed:{ticker}")
+                    skipped += 1
             else:
                 logger.warning(f"Order FAILED for {ticker}: {order_result[:200]}")
                 errors.append(f"order_failed:{ticker}")
@@ -565,6 +662,7 @@ def auto_execute_edges(client, edges: list, cfg: dict, auto_cfg: dict, dry_run: 
         "balance_remaining": round(remaining_balance, 2),
         "errors": errors,
         "executed_trades": executed_trades,
+        **_ledger_context(),
     }
     return summary
 

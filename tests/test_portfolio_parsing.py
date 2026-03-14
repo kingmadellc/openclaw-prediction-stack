@@ -126,6 +126,20 @@ class TestPortfolioV3Response:
 
         assert "KXSHUTDOWN" in result, f"Position ticker not in output: {result}"
 
+    def test_live_price_failure_stays_unknown(self):
+        """Market lookup failures must not fabricate a $0 value."""
+        from kalshi_commands import portfolio_command
+
+        mock_client = _make_mock_client(ONE_POSITION_V3)
+        mock_client.call_api.side_effect = ValueError("market lookup failed")
+
+        with patch("kalshi_commands._get_client", return_value=mock_client), \
+             patch("kalshi_commands._check_enabled", return_value=None):
+            result = portfolio_command()
+
+        assert "I don't know current total P&L" in result
+        assert "I don't know current value" in result
+
 
 class TestPortfolioV2Response:
     """API v2 returns market_positions."""

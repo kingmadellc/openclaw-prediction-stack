@@ -37,6 +37,7 @@ import fcntl
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -107,6 +108,7 @@ def record_trade(
     Returns the trade record that was written.
     """
     record = {
+        "id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "ticker": ticker,
         "side": side,
@@ -119,6 +121,9 @@ def record_trade(
         "title": title[:80],
         "dry_run": dry_run,
         "status": "open",  # open | closed | expired | cancelled
+        "confirmation_status": "dry_run" if dry_run else "pending",  # pending | confirmed | unconfirmed | dry_run
+        "confirmation_checked_at": None,
+        "confirmation_details": "",
         "close_timestamp": None,
         "close_reason": None,
         "pnl": None,
@@ -131,6 +136,36 @@ def record_trade(
     logger.info(f"Ledger: recorded {'[DRY RUN] ' if dry_run else ''}"
                 f"{side.upper()} {contracts}x {ticker} @ {price_cents}¢ (${cost_usd:.2f})")
     return record
+
+
+def update_trade_confirmation(
+    trade_id: str,
+    *,
+    confirmation_status: str,
+    details: str = "",
+) -> bool:
+    """Update a recorded trade with reconciliation status."""
+    if confirmation_status not in {"pending", "confirmed", "unconfirmed", "dry_run"}:
+        raise ValueError(f"Unknown confirmation status: {confirmation_status}")
+
+    ledger = _read_ledger()
+    found = False
+
+    for entry in ledger:
+        if entry.get("id") != trade_id:
+            continue
+        entry["confirmation_status"] = confirmation_status
+        entry["confirmation_checked_at"] = datetime.now(timezone.utc).isoformat()
+        entry["confirmation_details"] = details[:240]
+        found = True
+        break
+
+    if found:
+        _write_ledger(ledger)
+        logger.info("Ledger: trade %s marked %s", trade_id, confirmation_status)
+    else:
+        logger.warning("Ledger: trade id not found for confirmation update: %s", trade_id)
+    return found
 
 
 def close_position(
@@ -249,4 +284,62 @@ def get_summary() -> dict:
         "total_deployed_usd": round(total_deployed, 2),
         "total_realized_pnl": round(total_pnl, 2),
         "positions": get_open_positions(),
+    }
+
+
+def get_monthly_scorecard(now: Optional[datetime] = None) -> dict:
+    """Summarize current-month trading performance from the ledger.
+
+    Returns fail-loud metrics: values are present only when the ledger has
+    enough confirmed/closed information to support them.
+    """
+    now = now or datetime.now(timezone.utc)
+    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+    ledger = _read_ledger()
+    month_entries = []
+    for entry in ledger:
+        ts = entry.get("timestamp", "")
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if dt >= month_start and not entry.get("dry_run", False):
+            month_entries.append(entry)
+
+    closed_entries = [
+        entry for entry in month_entries
+        if entry.get("status") == "closed" and entry.get("pnl") is not None
+    ]
+    confirmed_entries = [
+        entry for entry in month_entries
+        if entry.get("confirmation_status") == "confirmed"
+    ]
+
+    wins = sum(1 for entry in closed_entries if float(entry.get("pnl", 0)) > 0)
+    losses = sum(1 for entry in closed_entries if float(entry.get("pnl", 0)) < 0)
+    total_pnl = round(sum(float(entry.get("pnl", 0)) for entry in closed_entries), 2)
+
+    best_trade = None
+    worst_trade = None
+    if closed_entries:
+        best_trade = max(closed_entries, key=lambda entry: float(entry.get("pnl", 0)))
+        worst_trade = min(closed_entries, key=lambda entry: float(entry.get("pnl", 0)))
+
+    accuracy_sample = wins + losses
+    edge_accuracy = None
+    if accuracy_sample > 0:
+        edge_accuracy = round((wins / accuracy_sample) * 100, 1)
+
+    return {
+        "month": month_start.strftime("%Y-%m"),
+        "entries_this_month": len(month_entries),
+        "confirmed_entries": len(confirmed_entries),
+        "resolved_entries": len(closed_entries),
+        "wins": wins,
+        "losses": losses,
+        "total_pnl": total_pnl,
+        "best_trade": best_trade,
+        "worst_trade": worst_trade,
+        "edge_accuracy_pct": edge_accuracy,
     }

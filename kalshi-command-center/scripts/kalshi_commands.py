@@ -1021,7 +1021,16 @@ def _place_order(
                 "status": status,
                 "verification": verify_msg[:200],
             })
-            return f"❓ Order submitted for {ticker}, but {verify_msg}"
+            try:
+                from trade_ledger import get_summary as ledger_summary
+                ledger = ledger_summary()
+                known = (
+                    f"Trade ledger still shows {ledger.get('open_positions', 0)} open positions "
+                    f"and ${ledger.get('total_deployed_usd', 0.0):.2f} deployed."
+                )
+            except Exception:
+                known = "Trade ledger context is unavailable."
+            return f"❓ Order submitted for {ticker}, but {verify_msg}\n📒 {known}"
 
         name = TICKER_NAMES.get(ticker, ticker)
         fill_msg = "Filled" if status == "executed" else "Resting" if status == "resting" else (status or "unknown").capitalize()

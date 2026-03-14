@@ -33,6 +33,58 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _ledger_context() -> dict:
+    """Return what the local trade ledger still knows."""
+    try:
+        from trade_ledger import get_summary as get_ledger_summary
+
+        summary = get_ledger_summary()
+        return {
+            "ledger_open_positions": summary.get("open_positions", 0),
+            "ledger_deployed_usd": summary.get("total_deployed_usd", 0.0),
+            "ledger_tickers": sorted(summary.get("positions", {}).keys()),
+        }
+    except Exception as e:
+        return {
+            "ledger_open_positions": 0,
+            "ledger_deployed_usd": 0.0,
+            "ledger_tickers": [],
+            "ledger_error": str(e)[:200],
+        }
+
+
+def _write_cache(payload: dict) -> None:
+    """Write cache payload for downstream consumers."""
+    cache_dir = Path.home() / ".openclaw" / "state"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / "kalshalyst_cache.json"
+    with open(cache_path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+
+def _write_fail_loud_cache(reason: str, known: str = "") -> None:
+    """Write an explicit uncertain cache entry instead of an empty success."""
+    message = "I don't know current opportunities"
+    if known:
+        message += f" — {known}"
+
+    payload = {
+        "insights": [],
+        "macro_count": 0,
+        "total_scanned": 0,
+        "scanner_version": "1.0.0",
+        "cached_at": datetime.now(timezone.utc).isoformat(),
+        "status": "uncertain",
+        "message": message,
+        "reason": reason,
+        **_ledger_context(),
+    }
+    try:
+        _write_cache(payload)
+    except OSError as e:
+        logger.warning("Could not write fail-loud cache: %s", e)
+
+
 # ── API Schema Normalization ────────────────────────────────────────────────
 def _normalize_market(m: dict) -> dict:
     """Normalize Kalshi API v3 dollar-string fields to integer cents.
@@ -575,15 +627,24 @@ def run_kalshalyst(client, cfg: dict, dry_run: bool = False) -> bool:
     # Phase 1: Fetch
     markets = fetch_kalshi_markets(client, cfg)
     if not markets:
+        _write_fail_loud_cache(
+            "no_markets_after_fetch",
+            known=f"trade ledger still tracks {_ledger_context().get('ledger_open_positions', 0)} open positions",
+        )
         if cfg.get("fresh_mode", False):
-            logger.info("FRESH: No new markets in last 48h")
+            logger.info("I don't know if there are fresh opportunities — no new markets passed the relaxed fetch window")
         else:
-            logger.info("Kalshalyst: no markets passed filters")
+            logger.info("I don't know current opportunities — no markets passed fetch filters")
         return False
 
     # Phase 3+4: Estimate + edge
     edges = calculate_edges(markets, cfg)
     edges = _apply_market_filter(edges, cfg)
+    if not edges:
+        _write_fail_loud_cache(
+            "no_confirmed_edges",
+            known=f"Kalshalyst scanned {len(markets)} markets but did not produce confirmed opportunities",
+        )
 
     # Phase 5: Cache + alert
     cache_payload = {
@@ -592,18 +653,16 @@ def run_kalshalyst(client, cfg: dict, dry_run: bool = False) -> bool:
         "total_scanned": len(markets),
         "scanner_version": "1.0.0",
         "cached_at": datetime.now(timezone.utc).isoformat(),
+        "status": "ok",
+        **_ledger_context(),
     }
 
     logger.info(f"Kalshalyst: {len(edges)} opportunities found")
 
     # Phase 5: Write cache for morning-brief consumption
-    cache_dir = Path.home() / ".openclaw" / "state"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_dir / "kalshalyst_cache.json"
     try:
-        with open(cache_path, "w") as f:
-            json.dump(cache_payload, f, indent=2)
-        logger.info(f"Cache written to {cache_path}")
+        _write_cache(cache_payload)
+        logger.info("Cache written to %s", Path.home() / ".openclaw" / "state" / "kalshalyst_cache.json")
     except OSError as e:
         logger.warning(f"Could not write cache: {e}")
 
