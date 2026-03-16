@@ -1,0 +1,77 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Run test suite
+        run: python -m pytest tests -q --tb=short
+
+      - name: Run stack health (offline mode)
+        run: python tests/stack_health.py --skip-auth 2>&1 || true
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax across all skills
+        run: |
+          find . -name "*.py" -not -path "*/node_modules/*" -not -path "*/__pycache__/*" | while read f; do
+            python -c "import py_compile; py_compile.compile('$f', doraise=True)" || exit 1
+          done
+
+      - name: Check for premium content leaks
+        run: |
+          # Ensure no premium prompt paths leak into public code
+          LEAKS=$(grep -rn "prompt-lab/prompt.md\|prompt-lab/xpulse-prompt" --include="*.py" --include="*.md" \
+            --exclude-dir=".git" --exclude-dir="__pycache__" \
+            --exclude="OPERATIONS.md" --exclude="README.md" --exclude="SKILL.md" \
+            . 2>/dev/null || true)
+          if [ -n "$LEAKS" ]; then
+            echo "WARNING: References to premium prompt paths found in public code:"
+            echo "$LEAKS"
+          fi
+
+      - name: Verify required skill directories exist
+        run: |
+          SKILLS="kalshalyst kalshi-command-center market-morning-brief personality-engine polymarket-command-center portfolio-drift-monitor prediction-market-arbiter prediction-stack-orchestrator prediction-stack-setup xpulse"
+          for skill in $SKILLS; do
+            if [ ! -d "$skill" ]; then
+              echo "FAIL: Missing skill directory: $skill"
+              exit 1
+            fi
+            if [ ! -f "$skill/SKILL.md" ]; then
+              echo "FAIL: Missing SKILL.md in $skill"
+              exit 1
+            fi
+          done
+          echo "All 10 skill directories verified."
